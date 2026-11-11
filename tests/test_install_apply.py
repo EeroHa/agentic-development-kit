@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from adk import cli
 from adk.install import apply_root, apply_user
 from adk.install.plan import FileChange, build_plan, write_staging
 from adk.paths import resolve
@@ -301,6 +302,33 @@ class ApplyUserTest(InstallTestBase):
                 apply_user.apply([good, target], self.p)
         self.assertFalse((self.p.config_dir / "ok.txt").exists())
         self.assertFalse((self.home / ".bashrc").exists())
+
+
+class InstallCommandTest(InstallTestBase):
+    def run_adk(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["install", *args, "--home", str(self.home), "--root", str(self.root)])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_plan_prints_diff_and_staging_path_on_last_line(self):
+        code, out, _ = self.run_adk("plan")
+        self.assertEqual(code, 0)
+        staging = self.p.config_dir / "staging"
+        self.assertEqual(out.strip().splitlines()[-1], str(staging))
+        self.assertIn("(new file)", out)
+        self.assertTrue((staging / "manifest.json").exists())
+        self.assertFalse(self.p.lib_dir.exists())
+        self.assertFalse(self.p.config_file.exists())
+
+    def test_apply_user_then_restore_user(self):
+        code, out, _ = self.run_adk("apply-user")
+        self.assertEqual(code, 0)
+        self.assertIn(str(self.p.config_file), out)
+        self.assertTrue(self.p.config_file.exists())
+        code, _, _ = self.run_adk("restore-user")
+        self.assertEqual(code, 0)
+        self.assertFalse(self.p.config_file.exists())
 
 
 if __name__ == "__main__":
