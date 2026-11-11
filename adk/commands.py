@@ -57,6 +57,9 @@ def _allow_run(args: argparse.Namespace) -> int:
         return 0
     if not d.is_dir():
         return _err(f"not a directory: {d}")
+    conflict = _secret_conflict(p, d)
+    if conflict:
+        return _err(conflict)
     if state.add_allowed_dir(p, d):
         print(f"allowed {d} (updated {p.claude_user_settings})")
     else:

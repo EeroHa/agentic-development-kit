@@ -67,6 +67,15 @@ class CommandsTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(self.p.lists_file.read_text())["never_dirs"], [])
 
+    def test_allow_dir_refuses_home_and_secret_dirs(self):
+        (self.home / ".ssh").mkdir()
+        for target in (self.home, self.home / ".ssh", self.tmp):
+            code, out, err = self.run_adk("allow-dir", str(target))
+            self.assertEqual(code, 1, target)
+            self.assertEqual(out, "")
+            self.assertIn("refusing", err)
+        self.assertFalse(self.p.claude_user_settings.exists())
+
     def test_reopen_refuses_secret_dir(self):
         (self.home / ".ssh").mkdir()
         code, out, err = self.run_adk("reopen", str(self.home / ".ssh"))
