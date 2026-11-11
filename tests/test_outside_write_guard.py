@@ -140,7 +140,11 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(decision(r), "deny")
         r = guard.decide(ev(self.proj, self.proj / ".git" / "hooks"), self.p)
         self.assertEqual(decision(r), "deny")
-        self.assertIsNone(guard.decide(ev(self.proj, self.proj / ".git" / "config"), self.p))
+
+    def test_git_config_denied(self):
+        r = guard.decide(ev(self.proj, self.proj / ".git" / "config"), self.p)
+        self.assertEqual(decision(r), "deny")
+        self.assertIsNone(guard.decide(ev(self.proj, self.proj / "src" / "config"), self.p))
 
     def test_notebook_path_is_used_for_NotebookEdit(self):
         r = guard.decide(ev(self.proj, self.other / "n.ipynb", tool="NotebookEdit"), self.p)

@@ -17,6 +17,8 @@ PROTECTED_NAMES: tuple[str, ...] = (
     ".claude/settings.json",
     ".claude/settings.local.json",
     ".mcp.json",
+    # core.hooksPath, core.fsmonitor and friends make git run arbitrary commands.
+    ".git/config",
 )
 
 
