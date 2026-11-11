@@ -10,7 +10,7 @@ from typing import Callable
 
 from adk import __version__
 
-_COMMAND_MODULES: list[str] = []
+_COMMAND_MODULES: list[str] = ["adk.commands"]
 
 _REGISTRY: dict[str, tuple[Callable[[argparse.ArgumentParser], None], Callable[[argparse.Namespace], int]]] = {}
 
