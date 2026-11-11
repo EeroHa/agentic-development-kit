@@ -284,15 +284,18 @@ class ApplyUserTest(InstallTestBase):
         self.assertEqual(apply_user.apply(self.changes(), self.p), [])
         self.assertEqual(len(self.backup_sets(self.p.backups_dir)), 1)
 
-    def test_restore_user_returns_original_tree(self):
+    def test_restore_user_removes_canary_and_backups_but_keeps_owner_files(self):
         (self.home / ".config").mkdir()
-        original = snapshot(self.home)
         apply_user.apply(self.changes(), self.p)
         self.p.canary_dir.joinpath("secret.txt").write_text("tampered")
         apply_user.apply(self.changes(), self.p)
         self.assertEqual(self.p.canary_dir.joinpath("secret.txt").read_text(), "ADK-CANARY-INSTALLED\n")
+        # The owner fills these in after install; an uninstall must not delete them.
+        self.p.secrets_file.write_text("TELEGRAM_BOT_TOKEN=fake-for-test\n")
         apply_user.restore(self.p)
-        self.assertEqual(snapshot(self.home), original)
+        left = sorted(str(f.relative_to(self.p.config_dir)) for f in self.p.config_dir.rglob("*"))
+        self.assertEqual(left, ["config.json", "lists.json", "secrets.env"])
+        self.assertEqual(self.p.secrets_file.read_text(), "TELEGRAM_BOT_TOKEN=fake-for-test\n")
 
     def test_user_target_outside_config_dir_is_refused(self):
         bad = FileChange(self.home / ".bashrc", b"evil\n", 0o600, "user")
@@ -328,7 +331,8 @@ class InstallCommandTest(InstallTestBase):
         self.assertTrue(self.p.config_file.exists())
         code, _, _ = self.run_adk("restore-user")
         self.assertEqual(code, 0)
-        self.assertFalse(self.p.config_file.exists())
+        self.assertTrue(self.p.config_file.exists())
+        self.assertFalse(self.p.canary_dir.exists())
 
 
 if __name__ == "__main__":

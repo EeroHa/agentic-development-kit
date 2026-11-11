@@ -61,12 +61,19 @@ def apply(changes: list[FileChange], p: Paths) -> list[str]:
 
 
 def restore(p: Paths) -> list[str]:
-    """Undo every user-scope apply, newest first, and delete the backup sets."""
+    """Undo every user-scope apply, newest first, and delete the backup sets.
+
+    Files the owner fills in after install (config, secrets, lists) are kept:
+    an uninstall must not delete a token or settings he entered.
+    """
+    keep = {p.config_file, p.secrets_file, p.lists_file}
     restored = []
     sets = sorted(p.backups_dir.iterdir(), reverse=True) if p.backups_dir.is_dir() else []
     for bdir in sets:
         for rel in json.loads((bdir / "created.json").read_text()):
             _inside_or_raise(p, p.config_dir / rel)
+            if p.config_dir / rel in keep:
+                continue
             (p.config_dir / rel).unlink(missing_ok=True)
             restored.append(str(p.config_dir / rel))
             _prune(p, (p.config_dir / rel).parent)

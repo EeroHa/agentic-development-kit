@@ -7,25 +7,33 @@ set -euo pipefail
 STAGING="$HOME/.config/adk/staging"
 BACKUPS=/var/backups/agentic-dev-kit
 APPLY_ROOT=adk/install/apply_root.py
+PY=/usr/bin/python3
 
 case "${1:-install}" in
   install)
-    python3 -m adk install plan
+    # These files get copied to root-owned locations and one of them runs as root,
+    # so only install a state that has been committed and reviewed.
+    if [ -n "$(git status --porcelain -- adk install.sh)" ]; then
+      echo "Uncommitted changes under adk/ or in install.sh. Review and commit them first." >&2
+      exit 1
+    fi
+    echo "Installing from commit $(git rev-parse --short HEAD) on branch $(git rev-parse --abbrev-ref HEAD)"
+    $PY -m adk install plan
     read -r -p "Apply? [y/N] " answer
     [ "$answer" = "y" ] || { echo "Nothing changed."; exit 0; }
-    python3 -m adk install apply-user
+    $PY -m adk install apply-user
     changed=$(sudo /usr/bin/python3 -I "$APPLY_ROOT" apply "$STAGING" "$BACKUPS")
     echo "$changed"
     if grep -q 'etc/apparmor.d/bwrap' <<<"$changed"; then
       sudo systemctl reload apparmor
     fi
-    if python3 -m adk doctor --help >/dev/null 2>&1; then
-      python3 -m adk doctor
+    if $PY -m adk doctor --help >/dev/null 2>&1; then
+      $PY -m adk doctor
     fi
     ;;
   uninstall)
     sudo /usr/bin/python3 -I "$APPLY_ROOT" restore "$BACKUPS"
-    python3 -m adk install restore-user
+    $PY -m adk install restore-user
     sudo systemctl reload apparmor
     ;;
   *)
