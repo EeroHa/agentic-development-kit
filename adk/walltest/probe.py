@@ -57,20 +57,23 @@ def grep(name, target):
 
 
 def try_write(name, path, keep=False):
+    """Create the file; if it exists already (the fixture's .git/config), append to it instead."""
     created_dir = None
+    appended = os.path.exists(path)
+    keep = keep or appended
     try:
         parent = os.path.dirname(path)
         if not os.path.isdir(parent):
             os.makedirs(parent)
             created_dir = parent
-        with open(path, "x") as fh:
+        with open(path, "a" if appended else "x") as fh:
             fh.write("adk write probe\n")
     except Exception as e:
         record(name, False, False, err(e))
     else:
         if keep:
             # The runner checks on the host that the file did not persist, then removes it.
-            record(name, True, False, "created inside the sandbox")
+            record(name, True, False, "written inside the sandbox")
         else:
             os.remove(path)
             record(name, True, False, "created and removed")
@@ -135,6 +138,9 @@ def main():
 
     for tname, path in cfg["write_targets"].items():
         try_write(tname, path, keep=tname in ("write:home", "write:home-claude"))
+
+    # A process the runner started outside the sandbox, with the canary in its environment.
+    read_open("proc:environ", f"/proc/{cfg['outside_pid']}/environ")
 
     for cname, path in (("control:read-readme", "README.md"), ("control:read-env-agent", "agent.env")):
         try:

@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import socket
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -76,6 +77,12 @@ def _run(args: argparse.Namespace) -> int:
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     listener.listen(5)
+    # A process started here, outside the sandbox, that holds the marker in its environment.
+    # The probe tries to read its /proc/<pid>/environ.
+    outside = subprocess.Popen(
+        ["sleep", str(2 * runner.TIMEOUT_SECONDS + 60)], stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, env={**os.environ, "ADK_PROC_CANARY": f.marker},
+    )
     try:
         shutil.copy(Path(__file__).with_name("probe.py"), f.project / "probe.py")
         config = {
@@ -83,8 +90,10 @@ def _run(args: argparse.Namespace) -> int:
             "control": f.control,
             "canaries": {k: str(v) for k, v in f.canaries.items()},
             "canary_dir": str(p.canary_dir),
-            "write_targets": {"write:" + k[5:]: str(v) for k, v in f.write_targets.items()
+            "write_targets": {"write:" + k[5:]: str(v)
+                              for k, v in {**f.write_targets, **f.append_targets}.items()
                               if k.startswith("bash:")},
+            "outside_pid": outside.pid,
             "outside_port": listener.getsockname()[1],
             "projects_dir": str(repo.parent),
             "repo_readme": str(repo / "README.md"),
@@ -114,6 +123,8 @@ def _run(args: argparse.Namespace) -> int:
         print(f"{len(checks) - len(failed)} of {len(checks)} checks ok, {len(failed)} failed")
         return 1 if failed else 0
     finally:
+        outside.kill()
+        outside.wait()
         listener.close()
         remove_leftovers(f)
         if args.keep:

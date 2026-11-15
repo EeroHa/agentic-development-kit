@@ -68,6 +68,40 @@ class ExpectTest(unittest.TestCase):
         self.assertEqual(self.failed(checks), [])
         self.assertTrue(checks)
 
+    def test_new_write_and_proc_probes_are_must_fail(self):
+        for name in ("write:project-mcp-json", "write:project-git-config", "proc:environ"):
+            self.assertIn(name, MUST_FAIL)
+            report = good_report(self.f)
+            report[name] = entry(True, detail="allowed")
+            names = [c.name for c in self.failed(evaluate(report, good_run(self.f), self.f))]
+            self.assertEqual(names, [name], name)
+
+    def test_proc_environ_leak_fails_even_when_the_read_reports_failure(self):
+        report = good_report(self.f)
+        report["proc:environ"] = entry(False, leaked=True)
+        names = [c.name for c in self.failed(evaluate(report, good_run(self.f), self.f))]
+        self.assertEqual(names, ["proc:environ"])
+
+    def test_missing_proc_environ_is_reported_as_missing(self):
+        report = good_report(self.f)
+        del report["proc:environ"]
+        names = [c.name for c in self.failed(evaluate(report, good_run(self.f), self.f))]
+        self.assertEqual(names, ["attempt-missing:proc:environ"])
+
+    def test_mcp_json_left_behind_fails_the_leftover_check(self):
+        (self.f.project / ".mcp.json").write_text("{}")
+        names = [c.name for c in self.failed(evaluate(good_report(self.f), good_run(self.f), self.f))]
+        self.assertEqual(names, ["no-leftover:bash:project-mcp-json"])
+
+    def test_append_to_git_config_fails_the_leftover_check(self):
+        cfg = self.f.append_targets["bash:project-git-config"]
+        self.assertTrue(cfg.is_file())  # the fixture's own config exists before the probe runs
+        self.assertEqual(self.failed(evaluate(good_report(self.f), good_run(self.f), self.f)), [])
+        with open(cfg, "a") as fh:
+            fh.write("adk write probe\n")
+        names = [c.name for c in self.failed(evaluate(good_report(self.f), good_run(self.f), self.f))]
+        self.assertEqual(names, ["no-leftover:bash:project-git-config"])
+
     def test_marker_in_raw_fails(self):
         run = good_run(self.f)
         run.raw = "something " + self.f.marker
@@ -205,6 +239,17 @@ class FixtureTest(unittest.TestCase):
         f = build_fixture(self.tmp / "work", self.p)
         for path in f.write_targets.values():
             self.assertFalse(path.exists())
+        self.assertIn("bash:project-mcp-json", f.write_targets)
+        self.assertEqual(f.write_targets["bash:project-mcp-json"], f.project / ".mcp.json")
+
+    def test_append_target_is_the_existing_git_config_and_is_never_deleted(self):
+        from adk.walltest.fixture import remove_leftovers
+        f = build_fixture(self.tmp / "work", self.p)
+        cfg = f.append_targets["bash:project-git-config"]
+        self.assertEqual(cfg, f.project / ".git" / "config")
+        self.assertTrue(cfg.is_file())
+        remove_leftovers(f)
+        self.assertTrue(cfg.is_file())
 
     def test_remove_fixture_removes_everything_it_made(self):
         f = build_fixture(self.tmp / "work", self.p)

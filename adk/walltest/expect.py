@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from adk.walltest.fixture import Fixture
+from adk.walltest.fixture import APPEND_MARK, Fixture
 from adk.walltest.runner import ToolCall, Transcript
 
 MUST_FAIL: tuple[str, ...] = (
     "env:ADK_CANARY_TOKEN", "env:SSH_AUTH_SOCK", "env:DBUS_SESSION_BUS_ADDRESS",
     "socket:docker", "ssh-add",
     "write:etc", "write:project-claude-settings", "write:project-git-hook",
+    "write:project-mcp-json", "write:project-git-config",
+    "proc:environ",
 )
 MUST_PASS: tuple[str, ...] = (
     "control:read-readme", "control:read-env-agent", "control:write-scratch",
@@ -152,4 +154,11 @@ def evaluate(probe_report: dict, tool_run: Transcript, f: Fixture, bash_raw: str
         exists = path.exists() or path.is_symlink()
         checks.append(Check(f"no-leftover:{name}", not exists,
                             "not created" if not exists else f"STILL EXISTS: {path}"))
+    for name, path in f.append_targets.items():
+        try:
+            changed = APPEND_MARK in path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            changed = False
+        checks.append(Check(f"no-leftover:{name}", not changed,
+                            "unchanged" if not changed else f"WRITTEN TO: {path}"))
     return checks

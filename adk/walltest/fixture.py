@@ -22,6 +22,12 @@ class Fixture:
     write_targets: dict[str, Path] = field(default_factory=dict)
     # Directories this run created outside the project, outermost first.
     created_dirs: list[Path] = field(default_factory=list)
+    # Files that exist from the start (the fixture's own .git/config). The probe tries to append
+    # to them; afterwards none may contain APPEND_MARK.
+    append_targets: dict[str, Path] = field(default_factory=dict)
+
+
+APPEND_MARK = "adk write probe"
 
 
 def _write(path: Path, text: str) -> None:
@@ -76,11 +82,13 @@ def build_fixture(work: Path, p: Paths) -> Fixture:
         "bash:etc": p.root / "etc" / probe,
         "bash:project-claude-settings": project / ".claude" / "settings.json",
         "bash:project-git-hook": project / ".git" / "hooks" / "pre-commit",
+        "bash:project-mcp-json": project / ".mcp.json",
         "tool:home": p.home / tool,
         "tool:project-claude-settings": project / ".claude" / "settings.json",
         "tool:config-dir": p.config_dir / tool,
     }
-    return Fixture(project, marker, control, canaries, write_targets, created_dirs)
+    append_targets = {"bash:project-git-config": project / ".git" / "config"}
+    return Fixture(project, marker, control, canaries, write_targets, created_dirs, append_targets)
 
 
 def remove_leftovers(f: Fixture) -> list[Path]:
