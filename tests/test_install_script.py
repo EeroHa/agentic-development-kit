@@ -60,9 +60,12 @@ class InstallScriptTest(unittest.TestCase):
                 os.chmod(path, 0o755 if os.stat(path).st_mode & 0o100 else 0o644)
         return dest
 
-    def run_script(self, script, *args, stdin="", cwd=None):
-        env = {**os.environ, "HOME": str(self.home), "ADK_REPO": str(self.repo), "PATH": os.environ["PATH"]}
+    def run_script(self, script, *args, stdin="", cwd=None, adk_repo=None):
+        env = {**os.environ, "HOME": str(self.home), "PATH": os.environ["PATH"]}
         env.pop("GIT_NO_REPLACE_OBJECTS", None)
+        env.pop("ADK_REPO", None)
+        if adk_repo != "unset":
+            env["ADK_REPO"] = str(adk_repo or self.repo)
         return subprocess.run(["bash", str(script), *args], input=stdin, capture_output=True, text=True,
                               env=env, cwd=cwd or self.work, timeout=60)
 
@@ -99,7 +102,7 @@ class InstallScriptTest(unittest.TestCase):
     def test_a_hash_that_is_not_a_commit_in_the_repo_is_refused(self):
         done = self.run_script(self.extract("a" * 40) / "install.sh", "a" * 40)
         self.assertEqual(done.returncode, 1)
-        self.assertIn("not a commit", done.stderr)
+        self.assertIn("not a commit in the repository", done.stderr)
         self.assert_nothing_installed()
 
     def test_a_replace_ref_is_refused_before_anything_else(self):
@@ -230,6 +233,45 @@ class InstallScriptTest(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertNotIn("EVIL", done.stdout + done.stderr)
         self.assertFalse((self.home / ".config" / "adk" / f"install-{self.hash}").exists())
+
+    def test_the_repository_of_the_current_folder_is_never_used(self):
+        script = self.extract() / "install.sh"
+        for adk_repo in ("unset", self.tmp / "no-such-folder", self.work):
+            with self.subTest(adk_repo=str(adk_repo)):
+                done = self.run_script(script, self.hash, stdin="y\n", cwd=self.repo, adk_repo=adk_repo)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn("is not a git repository", done.stderr)
+                self.assertNotIn("Subject", done.stdout)
+
+    def test_a_subfolder_of_a_repository_is_not_the_repository(self):
+        script = self.extract() / "install.sh"
+        done = self.run_script(script, self.hash, stdin="y\n", adk_repo=self.repo / "adk")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("is not a git repository", done.stderr)
+
+    def test_a_folder_that_is_a_different_repository_without_the_commit_is_refused(self):
+        other = self.tmp / "other"
+        other.mkdir()
+        subprocess.run(["git", "-C", str(other), "init", "-q"], check=True)
+        done = self.run_script(self.extract() / "install.sh", self.hash, stdin="y\n", cwd=self.repo, adk_repo=other)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("not a commit in the repository", done.stderr)
+
+    def test_the_default_repository_is_projects_agentic_dev_kit_under_home(self):
+        (self.home / "projects").mkdir()
+        subprocess.run(["git", "clone", "-q", str(self.repo), str(self.home / "projects" / "agentic-dev-kit")], check=True)
+        done = self.run_script(self.extract() / "install.sh", self.hash, stdin="n\n", cwd=self.work, adk_repo="unset")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Subject: the approved subject", done.stdout)
+
+    def test_git_environment_variables_do_not_redirect_install_sh(self):
+        other = self.tmp / "other-git-dir"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        env = {**os.environ, "HOME": str(self.home), "ADK_REPO": str(self.repo), "GIT_DIR": str(other / ".git")}
+        done = subprocess.run(["bash", str(self.extract() / "install.sh"), self.hash], input="n\n",
+                              capture_output=True, text=True, env=env, cwd=self.work, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("Subject: the approved subject", done.stdout)
 
     def test_the_working_tree_is_never_read(self):
         script = self.extract() / "install.sh"

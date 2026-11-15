@@ -17,6 +17,7 @@ Do not run this file from the repository. Run the verified export of the approve
   git -C "$R" fsck --no-dangling --no-progress && rm -rf "$D" && mkdir -p -m 700 "$D" && git -C "$R" cat-file blob "$H:adk/install/export.py" >"$D/export.py" && /usr/bin/python3 -I -B "$D/export.py" export "$R" "$D/src" "$H" && "$D/src/install.sh" "$H"'
 set -euo pipefail
 # A refs/replace entry makes git serve other bytes under the same hash. Never honour one.
+for v in $(compgen -e | grep '^GIT_' || true); do unset "$v"; done  # no GIT_DIR, GIT_OBJECT_DIRECTORY, ...
 export GIT_NO_REPLACE_OBJECTS=1
 export PYTHONDONTWRITEBYTECODE=1
 
@@ -45,16 +46,13 @@ BACKUPS=/var/backups/agentic-dev-kit
 PY=/usr/bin/python3
 EXPORT="$HERE/adk/install/export.py"
 
-# 3. The repository: the git repo of the current folder, ADK_REPO, or ~/projects/agentic-dev-kit,
-#    whichever holds the typed commit first.
-REPO=
-for cand in "$(git rev-parse --show-toplevel 2>/dev/null || true)" "${ADK_REPO:-}" "$HOME/projects/agentic-dev-kit"; do
-  if [ -n "$cand" ] && [ "$(git -C "$cand" cat-file -t "$hash" 2>/dev/null || true)" = commit ]; then
-    REPO=$cand
-    break
-  fi
-done
-[ -n "$REPO" ] || die "$hash is not a commit in the current folder's repository, in \$ADK_REPO or in ~/projects/agentic-dev-kit"
+# 3. One fixed repository, the one the documented one-liner reads from: $ADK_REPO, else
+#    ~/projects/agentic-dev-kit. Never the repository of the current folder.
+REPO=${ADK_REPO:-$HOME/projects/agentic-dev-kit}
+[ -d "$REPO" ] && [ "$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)" = "$(cd "$REPO" && pwd -P)" ] ||
+  die "refusing: $REPO is not a git repository (set ADK_REPO, or clone the kit to ~/projects/agentic-dev-kit)"
+[ "$(git -C "$REPO" cat-file -t "$hash" 2>/dev/null || true)" = commit ] ||
+  die "$hash is not a commit in the repository $REPO"
 
 # 4. Refuse a repository with replace refs, before anything is read from it (export.py checks again).
 for gitdir in "$(git -C "$REPO" rev-parse --git-dir)" "$(git -C "$REPO" rev-parse --git-common-dir)"; do

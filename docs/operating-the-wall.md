@@ -77,7 +77,7 @@ The installer will:
 
 1. Refuse to run from anywhere but `~/.config/adk/install-<hash>/src`, and check that this folder is exactly the export of the commit.
 2. Refuse if the repository has any `refs/replace` entry (`git replace`), a `commondir`, `objects/info/alternates`, `info/grafts` or `shallow` file, or if `git fsck --no-dangling` says anything. These make git show other file contents under the same hash, or read objects from another folder.
-3. Refuse if the hash is not a commit in the repository (it looks in the current folder's repository, in `$ADK_REPO`, then in `~/projects/agentic-dev-kit`).
+3. Use one fixed repository, `$ADK_REPO` if set, else `~/projects/agentic-dev-kit`, the same one the one-liner reads. It never uses the repository of the folder you are standing in. It refuses if that path is not a git repository, or if the hash is not a commit in it.
 4. Print the full hash and the commit subject, and ask `Install commit <hash> (<subject>)? [y/N]`. Only `y` continues. Nothing from the commit has run yet.
 5. Export that commit's `adk/` and `install.sh` into `~/.config/adk/src`, a folder Claude cannot reach, the same verified way. It refuses if the exported files are not exactly the commit's files with the commit's contents, or if the folder is not owned by you or is writable by anyone else.
 6. Show the plan and ask `Apply the plan above? [y/N]`. The plan, the user step, the root step and `adk doctor` all run from the exported copy. Before each root step the copy is checked again.
