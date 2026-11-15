@@ -151,6 +151,11 @@ class WallGenerateTest(unittest.TestCase):
         ):
             self.assertIn(rule, deny)
 
+    def test_edit_deny_rules_cover_files_that_redirect_git_to_other_folders(self):
+        deny = build()["permissions"]["deny"]
+        for rule in ("Edit(//**/.git/commondir)", "Edit(//**/.git/objects/info/alternates)"):
+            self.assertIn(rule, deny)
+
     def test_edit_deny_rules_cover_code_that_runs_outside_the_sandbox(self):
         deny = build()["permissions"]["deny"]
         for rule in (

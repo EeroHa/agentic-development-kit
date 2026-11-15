@@ -358,6 +358,10 @@ class GuardCodePathsTest(GuardBase):
         ):
             self.deny_target(self.proj / rel)
 
+    def test_git_commondir_and_alternates_are_denied(self):
+        for rel in (".git/commondir", ".git/objects/info/alternates"):
+            self.deny_target(self.proj / rel)
+
     def test_other_git_files_stay_writable(self):
         for rel in (".git/modules/sub/HEAD", ".git/worktrees/w1/HEAD", ".git/index", ".git/modules/sub/info/exclude"):
             self.assertIsNone(guard.decide(ev(self.proj, self.proj / rel), self.p), rel)

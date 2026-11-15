@@ -13,6 +13,9 @@ EDIT_DENY: tuple[str, ...] = (
     "Edit(//**/.mcp.json)",
     "Edit(//**/.git/hooks/**)",
     "Edit(//**/.git/config)",
+    # commondir and alternates make git read its config and objects from another folder.
+    "Edit(//**/.git/commondir)",
+    "Edit(//**/.git/objects/info/alternates)",
     "Edit(~/.config/adk/**)",
     # Git runs these without asking: a submodule's or worktree's config and hooks.
     "Edit(//**/.git/modules/**/config*)",

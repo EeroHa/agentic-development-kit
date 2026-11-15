@@ -19,6 +19,9 @@ PROTECTED_NAMES: tuple[str, ...] = (
     ".mcp.json",
     # core.hooksPath, core.fsmonitor and friends make git run arbitrary commands.
     ".git/config",
+    # commondir and alternates make git read its config and objects from another folder.
+    ".git/commondir",
+    ".git/objects/info/alternates",
 )
 # Files directly in the home folder that a login shell runs unsandboxed.
 HOME_FILES: tuple[str, ...] = (".bashrc", ".bash_profile", ".profile", ".zshrc")
