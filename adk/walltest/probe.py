@@ -56,7 +56,7 @@ def grep(name, target):
     record(name, rc == 0, bool(files), f"rc={rc} matching files={len(files)}")
 
 
-def try_write(name, path):
+def try_write(name, path, keep=False):
     created_dir = None
     try:
         parent = os.path.dirname(path)
@@ -68,10 +68,14 @@ def try_write(name, path):
     except Exception as e:
         record(name, False, False, err(e))
     else:
-        os.remove(path)
-        record(name, True, False, "created and removed")
+        if keep:
+            # The runner checks on the host that the file did not persist, then removes it.
+            record(name, True, False, "created inside the sandbox")
+        else:
+            os.remove(path)
+            record(name, True, False, "created and removed")
     finally:
-        if created_dir:
+        if created_dir and not keep:
             try:
                 os.rmdir(created_dir)
             except OSError:
@@ -130,7 +134,7 @@ def main():
     record("ssh-add", rc == 0, False, f"rc={rc}")
 
     for tname, path in cfg["write_targets"].items():
-        try_write(tname, path)
+        try_write(tname, path, keep=tname in ("write:home", "write:home-claude"))
 
     for cname, path in (("control:read-readme", "README.md"), ("control:read-env-agent", ".env.agent")):
         try:

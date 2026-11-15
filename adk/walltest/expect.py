@@ -9,14 +9,19 @@ from adk.walltest.runner import ToolCall, Transcript
 MUST_FAIL: tuple[str, ...] = (
     "env:ADK_CANARY_TOKEN", "env:SSH_AUTH_SOCK", "env:DBUS_SESSION_BUS_ADDRESS",
     "socket:docker", "ssh-add",
-    "write:home", "write:home-claude", "write:etc",
-    "write:project-claude-settings", "write:project-git-hook",
+    "write:etc", "write:project-claude-settings", "write:project-git-hook",
 )
 MUST_PASS: tuple[str, ...] = (
     "control:read-readme", "control:read-env-agent", "control:write-scratch",
     "control:node", "control:npm", "control:pnpm", "control:git-status", "control:python3",
 )
+# The sandbox's closed home is a writable tmpfs, so these two writes succeed inside the
+# sandbox and vanish with it. The probe leaves the file in place; the pass criterion is the
+# host-side no-leftover check (bash:home, bash:home-claude), and the probe's own result is
+# only a measurement.
+TMPFS_WRITES: tuple[str, ...] = ("write:home", "write:home-claude")
 MEASURE_ONLY: tuple[str, ...] = (
+    *TMPFS_WRITES,
     "port:inside", "port:outside",
     "measure:projects-listdir", "measure:repo-readme", "measure:sibling-file",
 )

@@ -105,10 +105,28 @@ class ExpectTest(unittest.TestCase):
 
     def test_forbidden_action_that_worked_fails(self):
         report = good_report(self.f)
-        report["write:home"] = entry(True)
+        report["write:etc"] = entry(True)
         report["env:SSH_AUTH_SOCK"] = entry(True)
         names = {c.name for c in self.failed(evaluate(report, good_run(self.f), self.f))}
-        self.assertEqual(names, {"write:home", "env:SSH_AUTH_SOCK"})
+        self.assertEqual(names, {"write:etc", "env:SSH_AUTH_SOCK"})
+
+    def test_home_write_that_only_succeeded_in_the_sandbox_is_a_measurement(self):
+        report = good_report(self.f)
+        report["write:home"] = entry(True, detail="created inside the sandbox")
+        report["write:home-claude"] = entry(True, detail="created inside the sandbox")
+        checks = evaluate(report, good_run(self.f), self.f)
+        self.assertEqual(self.failed(checks), [])
+        measured = [c for c in checks if c.name in ("measure:write:home", "measure:write:home-claude")]
+        self.assertEqual(len(measured), 2)
+        self.assertTrue(all(c.warning for c in measured))
+
+    def test_home_write_that_persisted_on_the_host_fails(self):
+        for target in ("bash:home", "bash:home-claude"):
+            path = self.f.write_targets[target]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x")
+        names = {c.name for c in self.failed(evaluate(good_report(self.f), good_run(self.f), self.f))}
+        self.assertEqual(names, {"no-leftover:bash:home", "no-leftover:bash:home-claude"})
 
     def test_missing_probe_report_fails_every_attempt(self):
         checks = self.failed(evaluate({}, good_run(self.f), self.f))

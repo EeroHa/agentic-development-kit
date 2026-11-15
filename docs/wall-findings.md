@@ -9,35 +9,33 @@ among relevant keys). Spec section 12a refers to the numbered items below.
 
 ## Result of the last full run
 
-56 checks, 54 ok, 2 failed. The two failures are `write:home` and `write:home-claude`
-(see "Open problem"). Every read, environment, socket, network, tool-level and positive-control
-check holds. The negative control (an empty settings file, which leaves only the owner's
-`sandbox.enabled: true`) exits 1 with 23 failures: the marker appears in the tool run's output, all eight file reads and
-both greps leak, the three environment variables are present, the four tool-level reads succeed,
-the two tool-level writes into the home directory succeed (and are reported as leftovers), and
-the registry is refused. So the harness does not pass without the wall.
+56 checks, 56 ok, 0 failed, exit 0. The negative control (an empty settings file, which leaves
+only the owner's `sandbox.enabled: true`) exits 1 with 23 failures: the marker appears in the
+tool run's output, all eight file reads and both greps leak, the three environment variables are
+present, the four tool-level reads succeed, the two tool-level writes into the home directory
+succeed (and are reported as leftovers), and the registry is refused. So the harness does not
+pass without the wall.
 
-## Open problem: writes into the home directory succeed inside the sandbox
+## Writes into the home directory succeed inside the sandbox but never persist
 
 With `denyRead: ["~/", ...]` the sandbox replaces the home directory with an empty,
 **writable tmpfs** and re-binds only the allowed paths into it. A probe can therefore create
-files directly in `~` and in `~/.claude` and they show up as created. Measured:
+files directly in `~` and in `~/.claude`, and the write reports success. Measured:
 
-- The file exists only inside that command's mount namespace. A file created and kept by a
-  sandboxed `touch ~/adk-diag-1` did not exist on the host afterwards, and no
-  `adk-write-probe-*` file ever existed on the host after any run (`no-leftover:*` all pass).
-- Adding `sandbox.filesystem.denyWrite` entries does not change it: `["~/"]`, `["~"]`, the
-  absolute home path and `["~/.claude"]` all left `~` and `~/.claude` writable (they only make
-  the project directory read-only, which breaks the positive controls). Re-allowing the project
-  with `allowWrite` did not undo that.
-- Without the wall (empty settings) the same two probes fail with "Read-only file system".
+- The file exists only inside that command's mount namespace. A sandboxed `touch ~/adk-diag-1`
+  did not exist on the host afterwards, and no `adk-write-probe-*` file ever existed on the
+  host after any run.
+- `sandbox.filesystem.denyWrite` entries (`["~/"]`, `["~"]`, the absolute home path,
+  `["~/.claude"]`) do not change it; they only make the project directory read-only, which
+  breaks the positive controls.
+- Without the wall (empty settings) the same two writes fail with "Read-only file system".
 
-So the must-hold checks `write:home` and `write:home-claude` as written ("the write attempt
-fails") cannot pass with a closed home directory, and no policy change tried makes them pass.
-The real property, "nothing a sandboxed command writes outside the project reaches the disk",
-holds. This needs a decision: either the probe leaves the file in place and the runner's
-host-side check (`no-leftover:bash:*`, already in place) becomes the pass criterion for these
-two writes, or the home directory stays open for reading. The harness was not changed.
+Decision (Eero): the closed-home design stays. For `write:home` and `write:home-claude` the pass
+criterion is the host-side check: the probe leaves the file in place and the runner verifies
+that it does not exist on the host (`no-leftover:bash:home`, `no-leftover:bash:home-claude`),
+then removes it if it does. The probe's own result is reported as a measurement
+(`measure:write:home`, `measure:write:home-claude`, "created inside the sandbox"). Every other
+write check is unchanged: the probe's write must fail.
 
 ## Item 2: local ports
 
