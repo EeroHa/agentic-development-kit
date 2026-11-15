@@ -63,16 +63,27 @@ def _managed_installed(p: Paths, env: Mapping[str, str]) -> Check:
     return Check("managed-installed", True, str(p.managed_dropin))
 
 
+def _owned_paths(p: Paths) -> list[Path]:
+    """The drop-in and lib_dir, plus every file and folder inside lib_dir and managed-settings.d."""
+    found = [p.managed_dropin, p.lib_dir]
+    for top in (p.lib_dir, p.managed_dropin.parent):
+        for folder, dirs, names in os.walk(top):
+            found += [Path(folder) / n for n in (*dirs, *names)]
+        if top != p.lib_dir:
+            found.append(top)
+    return list(dict.fromkeys(found))
+
+
 def _root_owned(p: Paths) -> Check:
     problems: list[str] = []
     skipped = False
-    for path in (p.managed_dropin, p.lib_dir):
+    for path in _owned_paths(p):
         try:
-            st = os.stat(path)
+            st = os.lstat(path)
         except OSError:
             problems.append(f"missing: {path}")
             continue
-        if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        if not stat.S_ISLNK(st.st_mode) and st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
             problems.append(f"group- or world-writable: {path}")
         if st.st_uid != 0:
             # Under a test root the files belong to the test user; only the real root is held to uid 0.
@@ -81,7 +92,8 @@ def _root_owned(p: Paths) -> Check:
             else:
                 problems.append(f"not owned by root: {path}")
     if problems:
-        return Check("managed-root-owned", False, "; ".join(problems))
+        shown = "; ".join(problems[:5]) + (f"; and {len(problems) - 5} more" if len(problems) > 5 else "")
+        return Check("managed-root-owned", False, shown)
     if skipped:
         return Check("managed-root-owned", True, "ownership not checked (not root, test paths)", warning=True)
     return Check("managed-root-owned", True, "root-owned and not writable by others")

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ def _which(name):
 
 class DoctorStaticChecks(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))  # a plain root-like umask for the files made here
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         base = Path(self.tmp.name)
@@ -98,6 +100,72 @@ class DoctorStaticChecks(unittest.TestCase):
         self.p.lib_dir.mkdir(parents=True)
         c = self.run_checks()["managed-root-owned"]
         self.assertFalse(c.ok)
+
+    def make_lib(self):
+        for rel in ("adk/a.py", "adk/hooks/guard.py", "bin/adk"):
+            f = self.p.lib_dir / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("x\n")
+            f.chmod(0o644)
+
+    def test_clean_tree_passes_root_owned(self):
+        self.install()
+        self.make_lib()
+        self.assertTrue(self.run_checks()["managed-root-owned"].ok)
+
+    def test_writable_file_inside_lib_dir_fails_root_owned(self):
+        self.install()
+        self.make_lib()
+        (self.p.lib_dir / "adk" / "hooks" / "guard.py").chmod(0o666)
+        c = self.run_checks()["managed-root-owned"]
+        self.assertFalse(c.ok)
+        self.assertIn("guard.py", c.detail)
+
+    def test_writable_folder_inside_lib_dir_fails_root_owned(self):
+        self.install()
+        self.make_lib()
+        (self.p.lib_dir / "adk" / "hooks").chmod(0o775)
+        c = self.run_checks()["managed-root-owned"]
+        self.assertFalse(c.ok)
+        self.assertIn("hooks", c.detail)
+
+    def test_extra_writable_file_in_managed_settings_d_fails_root_owned(self):
+        self.install()
+        self.make_lib()
+        extra = self.p.managed_dropin.parent / "99-extra.json"
+        extra.write_text("{}\n")
+        extra.chmod(0o664)
+        c = self.run_checks()["managed-root-owned"]
+        self.assertFalse(c.ok)
+        self.assertIn("99-extra.json", c.detail)
+
+    def test_writable_managed_settings_d_folder_fails_root_owned(self):
+        self.install()
+        self.make_lib()
+        self.p.managed_dropin.parent.chmod(0o777)
+        c = self.run_checks()["managed-root-owned"]
+        self.assertFalse(c.ok)
+
+    def test_files_owned_by_someone_else_fail_when_the_root_is_real(self):
+        self.install()
+        self.make_lib()
+        real_root = resolve(home=self.p.home, root=Path("/"))
+        stub = doctor.Paths(**{**vars(real_root), "managed_dropin": self.p.managed_dropin, "lib_dir": self.p.lib_dir})
+        c = doctor._root_owned(stub)
+        self.assertFalse(c.ok)
+        self.assertIn("not owned by root", c.detail)
+
+    def test_many_problems_are_summarised(self):
+        self.install()
+        self.make_lib()
+        for f in self.p.lib_dir.rglob("*.py"):
+            f.chmod(0o666)
+        for i in range(8):
+            g = self.p.lib_dir / f"extra{i}.py"
+            g.write_text("x")
+            g.chmod(0o666)
+        c = self.run_checks()["managed-root-owned"]
+        self.assertIn("more", c.detail)
 
 
 if __name__ == "__main__":
