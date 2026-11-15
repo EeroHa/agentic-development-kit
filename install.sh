@@ -5,16 +5,16 @@
 # or uninstalled: nothing from the working tree (which Claude can write to) is ever copied
 # to a system location or run, as root or as the owner.
 #
-# Run the copy of this script that belongs to the approved commit, not the working-tree copy:
+# Run the copy of this script that the verified export of the approved commit made, never the
+# working-tree copy. install.sh refuses to run from anywhere else.
 USAGE='usage:
   install.sh <40-hex-commit>              install that commit
   install.sh uninstall <40-hex-commit>    uninstall, using that commit
 
-Run the copy of install.sh from the approved commit, not the one in the working tree:
-  export TMPDIR=${TMPDIR:-/tmp}
-  rm -rf "$TMPDIR/adk-install" && mkdir -m 700 "$TMPDIR/adk-install"
-  git -C ~/projects/agentic-dev-kit archive <hash> install.sh adk | tar -x -C "$TMPDIR/adk-install" && "$TMPDIR/adk-install/install.sh" <hash>
-and for uninstall:  ... && "$TMPDIR/adk-install/install.sh" uninstall <hash>'
+Do not run this file from the repository. Run the verified export of the approved commit
+(replace <hash> with the full hash you reviewed; for uninstall add the word uninstall before "$H"):
+  export GIT_NO_REPLACE_OBJECTS=1; H=<hash>; R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}; D=$HOME/.config/adk/install-$H
+  git -C "$R" fsck --no-dangling --no-progress && rm -rf "$D" && mkdir -p -m 700 "$D" && git -C "$R" cat-file blob "$H:adk/install/export.py" >"$D/export.py" && /usr/bin/python3 -I -B "$D/export.py" export "$R" "$D/src" "$H" && "$D/src/install.sh" "$H"'
 set -euo pipefail
 # A refs/replace entry makes git serve other bytes under the same hash. Never honour one.
 export GIT_NO_REPLACE_OBJECTS=1
@@ -33,14 +33,19 @@ case "$#" in
 esac
 [[ $hash =~ ^[0-9a-f]{40}$ ]] || usage
 
+# 2. Run only from the verified export under ~/.config/adk, which Claude cannot write to.
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+WANT="$HOME/.config/adk/install-$hash/src"
+[ -d "$WANT" ] && [ ! -L "$HOME/.config/adk" ] && [ ! -L "$HOME/.config/adk/install-$hash" ] && [ ! -L "$WANT" ] &&
+  [ "$HERE" = "$(cd "$WANT" && pwd -P)" ] ||
+  die "refusing: run install.sh from $WANT, made by the export (run install.sh without arguments for the commands), not from $HERE"
 SRC="$HOME/.config/adk/src"
 STAGING="$HOME/.config/adk/staging"
 BACKUPS=/var/backups/agentic-dev-kit
 PY=/usr/bin/python3
 EXPORT="$HERE/adk/install/export.py"
 
-# 2. The repository: the git repo of the current folder, ADK_REPO, or ~/projects/agentic-dev-kit,
+# 3. The repository: the git repo of the current folder, ADK_REPO, or ~/projects/agentic-dev-kit,
 #    whichever holds the typed commit first.
 REPO=
 for cand in "$(git rev-parse --show-toplevel 2>/dev/null || true)" "${ADK_REPO:-}" "$HOME/projects/agentic-dev-kit"; do
@@ -51,7 +56,7 @@ for cand in "$(git rev-parse --show-toplevel 2>/dev/null || true)" "${ADK_REPO:-
 done
 [ -n "$REPO" ] || die "$hash is not a commit in the current folder's repository, in \$ADK_REPO or in ~/projects/agentic-dev-kit"
 
-# 3. Refuse a repository with replace refs, before anything is read from it (export.py checks again).
+# 4. Refuse a repository with replace refs, before anything is read from it (export.py checks again).
 for gitdir in "$(git -C "$REPO" rev-parse --git-dir)" "$(git -C "$REPO" rev-parse --git-common-dir)"; do
   [[ $gitdir = /* ]] || gitdir="$REPO/$gitdir"
   if [ -n "$(ls -A "$gitdir/refs/replace" 2>/dev/null || true)" ] || grep -qs 'refs/replace/' "$gitdir/packed-refs"; then
@@ -60,17 +65,18 @@ for gitdir in "$(git -C "$REPO" rev-parse --git-dir)" "$(git -C "$REPO" rev-pars
 done
 [ -z "$(git -C "$REPO" for-each-ref refs/replace)" ] || die "refusing: git for-each-ref refs/replace lists entries"
 
-# 4. Tripwire: this script and export.py must equal the approved commit's copies.
+# 5. Tripwire: this script and export.py must equal the approved commit's copies.
 #    This is a tripwire, not a guarantee. A copy that was edited can simply skip this check, so
-#    the only safe way is the documented one: extract install.sh and adk/ from the commit
-#    with git archive (see the usage text) and run that extracted copy. If the check cannot run,
-#    refuse.
+#    the only safe way is the documented one: run the copy that export.py wrote under
+#    ~/.config/adk (see the usage text). If the check cannot run, refuse.
 for f in install.sh adk/install/export.py; do
   cmp -s <(git -C "$REPO" cat-file blob "$hash:$f" 2>/dev/null) "$HERE/$f" ||
-    die "refusing: $HERE/$f is not the copy in commit $hash. Run the extracted copy: run install.sh without arguments for the commands"
+    die "refusing: $HERE/$f is not the copy in commit $hash. Run the exported copy: run install.sh without arguments for the commands"
 done
+$PY -I "$EXPORT" verify "$REPO" "$HERE" "$hash" ||
+  die "refusing: $HERE is not exactly the export of commit $hash"
 
-# 5. Show the commit and ask. Nothing from the commit has run yet.
+# 6. Show the commit and ask. Nothing from the commit has run yet.
 subject=$($PY -I "$EXPORT" info "$REPO" "$hash")
 verb=Install
 [ "$action" = install ] || verb=Uninstall
@@ -78,7 +84,7 @@ echo "Commit:  $hash"
 echo "Subject: $subject"
 ask "$verb commit $hash ($subject)? [y/N]" || { echo "Nothing changed."; exit 0; }
 
-# 6. Export exactly that commit. Every step below runs from the exported copy.
+# 7. Export exactly that commit. Every step below runs from the exported copy.
 $PY -I "$EXPORT" export "$REPO" "$SRC" "$hash"
 adk() { (cd "$SRC" && $PY -B -E -s -m adk "$@"); }
 # Right before each root step: the exported files are still the commit's, owned by the owner, not writable by others.
