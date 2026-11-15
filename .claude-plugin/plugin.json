@@ -1,0 +1,8 @@
+{
+  "name": "adk",
+  "version": "0.1.0",
+  "description": "Personal Claude Code kit: adk command line tool and plugin components.",
+  "author": {
+    "name": "Eero Hakanen"
+  }
+}

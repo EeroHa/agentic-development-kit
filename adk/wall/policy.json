@@ -1,0 +1,43 @@
+{
+  "reopen_read": [
+    "~/.nvm", "~/.npm", "~/.gitconfig", "~/.local/share/pnpm", "~/.cache/pip",
+    "~/.cache/pnpm", "~/.cache/ms-playwright", "~/.bun", "~/.gradle",
+    "~/.android", "~/Android", "~/.dotnet",
+    "/etc/ssl/certs/ca-certificates.crt"
+  ],
+  "reopen_write": ["~/.npm", "~/.cache/pip", "~/.cache/pnpm", "~/.local/share/pnpm"],
+  "secret_dirs": [
+    "~/.ssh", "~/.gnupg", "~/.aws", "~/.config/gcloud", "~/.azure", "~/.kube",
+    "~/.docker", "~/.config/gh", "~/.config/adk", "~/.claude/.credentials.json",
+    "~/.claude.json", "~/.npmrc", "~/.netrc", "~/.git-credentials", "~/.pki",
+    "~/.password-store", "~/.local/share/keyrings", "~/.mozilla",
+    "~/.config/google-chrome", "~/.config/chromium", "~/snap", "~/.expo",
+    "~/.gk", "~/.rest-client",
+    "~/.android/adbkey", "~/.gradle/gradle.properties",
+    "~/.claude/projects/**/*.jsonl", "~/.claude/history.jsonl",
+    "~/.claude/file-history", "~/.claude/shell-snapshots"
+  ],
+  "secret_file_names": [
+    ".env", ".env.local", ".env.*.local", ".env.development", ".env.production",
+    ".env.staging", ".env.*", ".envrc", "*.tfvars", ".dev.vars", "*.env", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
+    "id_rsa*", "id_ed25519*", "service-account*.json"
+  ],
+  "readable_env_files": ["agent.env"],
+  "env_deny": [
+    "SSH_AUTH_SOCK", "GNOME_KEYRING_CONTROL", "DBUS_SESSION_BUS_ADDRESS",
+    "ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "OPENAI_API_KEY", "ADK_CANARY_TOKEN"
+  ],
+  "env_name_patterns": ["KEY", "TOKEN", "SECRET", "PASSW", "CREDENTIAL", "AUTH", "DSN", "DATABASE_URL"],
+  "env_never_deny": ["CLAUDE_CODE_MESSAGING_TOKEN", "XAUTHORITY"],
+  "allowed_domains": [
+    "registry.npmjs.org", "*.npmjs.org", "pypi.org", "files.pythonhosted.org",
+    "github.com", "*.github.com", "*.githubusercontent.com", "nodejs.org",
+    "context7.com", "*.context7.com", "code.claude.com"
+  ],
+  "marketplaces": [
+    {"source": "github", "repo": "anthropics/claude-plugins-official"},
+    {"source": "github", "repo": "EeroHa/agentic-development-kit"}
+  ]
+}

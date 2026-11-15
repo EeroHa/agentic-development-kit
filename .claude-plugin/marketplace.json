@@ -1,0 +1,14 @@
+{
+  "name": "agentic-dev-kit",
+  "owner": {
+    "name": "Eero Hakanen"
+  },
+  "description": "Personal Claude Code kit by Eero Hakanen.",
+  "plugins": [
+    {
+      "name": "adk",
+      "source": "./",
+      "description": "Personal Claude Code kit: adk command line tool and plugin components."
+    }
+  ]
+}
