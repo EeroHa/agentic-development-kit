@@ -2,7 +2,8 @@
   "reopen_read": [
     "~/.nvm", "~/.npm", "~/.gitconfig", "~/.local/share/pnpm", "~/.cache/pip",
     "~/.cache/pnpm", "~/.cache/ms-playwright", "~/.bun", "~/.gradle",
-    "~/.android", "~/Android", "~/.dotnet"
+    "~/.android", "~/Android", "~/.dotnet",
+    "/etc/ssl/certs/ca-certificates.crt"
   ],
   "reopen_write": ["~/.npm", "~/.cache/pip", "~/.cache/pnpm", "~/.local/share/pnpm"],
   "secret_dirs": [

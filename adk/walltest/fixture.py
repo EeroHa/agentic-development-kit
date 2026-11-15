@@ -1,6 +1,7 @@
 """The throwaway project full of fake secrets that the wall test attacks."""
 from __future__ import annotations
 
+import re
 import secrets
 import shutil
 import subprocess
@@ -88,8 +89,19 @@ def remove_leftovers(f: Fixture) -> list[Path]:
     return found
 
 
+def _remove_session_dir(f: Fixture, p: Paths) -> None:
+    """Claude Code makes an empty ~/.claude/projects/<slug>/memory for every project it starts in."""
+    slug = p.home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(f.project))
+    for d in (slug / "memory", slug):
+        try:
+            d.rmdir()
+        except OSError:
+            return
+
+
 def remove_fixture(f: Fixture, p: Paths) -> None:
     remove_leftovers(f)
+    _remove_session_dir(f, p)
     shutil.rmtree(f.project, ignore_errors=True)
     for path in f.canaries.values():
         if f.project not in path.parents and path.is_file():

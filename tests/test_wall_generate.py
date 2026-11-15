@@ -33,6 +33,12 @@ class WallGenerateTest(unittest.TestCase):
         self.assertEqual(fs["allowRead"], policy["reopen_read"])
         self.assertEqual(fs["allowWrite"], policy["reopen_write"])
 
+    def test_ca_bundle_is_reopened(self):
+        # A wildcard denyRead such as ~/**/*.pem also masks the target of any symlink
+        # under home that matches it (measured: a Steam runtime cert.pem pointing at the
+        # system CA bundle), which breaks TLS for every sandboxed command.
+        self.assertIn("/etc/ssl/certs/ca-certificates.crt", build()["sandbox"]["filesystem"]["allowRead"])
+
     def test_env_names_from_environment_are_added(self):
         out = build(["MY_API_KEY", "PATH", "CLAUDE_CODE_MESSAGING_TOKEN"])
         entries = out["sandbox"]["credentials"]["envVars"]
