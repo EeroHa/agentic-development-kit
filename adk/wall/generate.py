@@ -14,6 +14,11 @@ EDIT_DENY: tuple[str, ...] = (
     "Edit(//**/.git/hooks/**)",
     "Edit(//**/.git/config)",
     "Edit(~/.config/adk/**)",
+    # Git runs these without asking: a submodule's or worktree's config and hooks.
+    "Edit(//**/.git/modules/**/config*)",
+    "Edit(//**/.git/modules/**/hooks/**)",
+    "Edit(//**/.git/worktrees/*/config*)",
+    "Edit(//**/.git/worktrees/**/hooks/**)",
     # Programs that run unsandboxed: shell profiles, startup items, user services,
     # ~/.local/bin (ahead of /usr/bin on PATH) and the installed plugins.
     "Edit(~/.bashrc)",

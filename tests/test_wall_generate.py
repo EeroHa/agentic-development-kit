@@ -134,6 +134,10 @@ class WallGenerateTest(unittest.TestCase):
     def test_edit_deny_rules_cover_code_that_runs_outside_the_sandbox(self):
         deny = build()["permissions"]["deny"]
         for rule in (
+            "Edit(//**/.git/modules/**/config*)",
+            "Edit(//**/.git/modules/**/hooks/**)",
+            "Edit(//**/.git/worktrees/*/config*)",
+            "Edit(//**/.git/worktrees/**/hooks/**)",
             "Edit(~/.bashrc)", "Edit(~/.bash_profile)", "Edit(~/.profile)", "Edit(~/.zshrc)",
             "Edit(~/.config/autostart/**)", "Edit(~/.config/systemd/user/**)",
             "Edit(~/.local/bin/**)", "Edit(~/.claude/plugins/**)",

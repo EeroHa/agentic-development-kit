@@ -342,6 +342,26 @@ class GuardCodePathsTest(GuardBase):
         (self.proj / "bin-link").symlink_to(self.p.home / ".local" / "bin")
         self.deny_target(self.proj / "bin-link" / "git")
 
+    def test_submodule_git_config_and_hooks_are_denied(self):
+        for rel in (
+            ".git/modules/sub/config", ".git/modules/sub/config.worktree",
+            ".git/modules/a/modules/b/config", ".git/modules/sub/hooks/pre-commit",
+            ".git/modules/a/b/hooks/post-checkout",
+        ):
+            self.deny_target(self.proj / rel)
+
+    def test_worktree_git_config_and_hooks_are_denied(self):
+        for rel in (
+            ".git/worktrees/w1/config", ".git/worktrees/w1/config.worktree",
+            ".git/worktrees/w1/hooks/pre-commit", ".git/worktrees/w1/x/hooks/pre-commit",
+            ".git/config", ".git/hooks/pre-commit",
+        ):
+            self.deny_target(self.proj / rel)
+
+    def test_other_git_files_stay_writable(self):
+        for rel in (".git/modules/sub/HEAD", ".git/worktrees/w1/HEAD", ".git/index", ".git/modules/sub/info/exclude"):
+            self.assertIsNone(guard.decide(ev(self.proj, self.proj / rel), self.p), rel)
+
     def test_notebook_edit_is_guarded_too(self):
         r = guard.decide(ev(self.proj, self.p.home / ".bashrc", tool="NotebookEdit"), self.p)
         self.assertEqual(decision(r), "deny")

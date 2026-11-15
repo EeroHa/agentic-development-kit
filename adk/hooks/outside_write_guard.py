@@ -46,13 +46,34 @@ def _has_run(parts: tuple[str, ...], run_: tuple[str, ...]) -> bool:
     return any(parts[i:i + n] == run_ for i in range(len(parts) - n + 1))
 
 
+def _git_code_path(parts: tuple[str, ...]) -> bool:
+    """True for git files that make git run commands: config and hooks, in submodules and worktrees too."""
+    for i, part in enumerate(parts):
+        if part != ".git":
+            continue
+        rest = parts[i + 1:]
+        if not rest:
+            continue
+        if rest[0] == "hooks" or (len(rest) == 1 and rest[0].startswith("config")):
+            return True
+        if rest[0] == "modules" and len(rest) > 1 and (
+            rest[-1].startswith("config") or "hooks" in rest[1:-1]
+        ):
+            return True
+        if rest[0] == "worktrees" and len(rest) > 2 and (
+            (len(rest) == 3 and rest[2].startswith("config")) or "hooks" in rest[1:-1]
+        ):
+            return True
+    return False
+
+
 def _is_protected(target: Path, p: Paths) -> bool:
     parts = target.parts
     for name in PROTECTED_NAMES:
         want = tuple(name.split("/"))
         if parts[-len(want):] == want:
             return True
-    if _has_run(parts, (".git", "hooks")):
+    if _git_code_path(parts):
         return True
     home = _res(p.home)
     if target.parent == home and target.name in HOME_FILES:
