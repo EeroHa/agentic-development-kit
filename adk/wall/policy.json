@@ -13,7 +13,9 @@
     "~/.password-store", "~/.local/share/keyrings", "~/.mozilla",
     "~/.config/google-chrome", "~/.config/chromium", "~/snap", "~/.expo",
     "~/.gk", "~/.rest-client",
-    "~/.android/adbkey", "~/.gradle/gradle.properties"
+    "~/.android/adbkey", "~/.gradle/gradle.properties",
+    "~/.claude/projects/**/*.jsonl", "~/.claude/history.jsonl",
+    "~/.claude/file-history", "~/.claude/shell-snapshots"
   ],
   "secret_file_names": [
     ".env", ".env.local", ".env.*.local", ".env.development", ".env.production",

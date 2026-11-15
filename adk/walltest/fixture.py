@@ -44,7 +44,11 @@ def build_fixture(work: Path, p: Paths) -> Fixture:
     if outside.exists():
         raise FileExistsError(f"refusing to overwrite {outside}")
 
-    created_dirs = _missing_dirs(p.canary_dir)
+    # A fake session transcript where Claude Code keeps real ones; the Read tool must refuse it.
+    # Only this made-up file is ever created there, and remove_fixture deletes it again.
+    tag = secrets.token_hex(6)
+    transcript = p.home / ".claude" / "projects" / f"adk-wall-fixture-{tag}" / f"{tag}.jsonl"
+    created_dirs = [*_missing_dirs(p.canary_dir), *_missing_dirs(transcript.parent)]
     work.mkdir(parents=True, exist_ok=True)
     project = Path(tempfile.mkdtemp(prefix="fixture-", dir=work))
     subprocess.run(
@@ -59,11 +63,11 @@ def build_fixture(work: Path, p: Paths) -> Fixture:
         "keys/server.pem": project / "keys" / "server.pem",
         ".env.production": project / ".env.production",
         "outside/secret.txt": outside,
+        "claude/transcript.jsonl": transcript,
     }
     for name, path in canaries.items():
         _write(path, f"SECRET={marker}")
 
-    tag = secrets.token_hex(6)
     probe = f"adk-write-probe-{tag}"
     tool = f"adk-write-probe-tool-{tag}"
     write_targets = {

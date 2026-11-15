@@ -144,6 +144,21 @@ class WallGenerateTest(unittest.TestCase):
         ):
             self.assertIn(rule, deny)
 
+    def test_claude_transcripts_and_history_are_denied_but_memory_and_skills_are_not(self):
+        out = build()
+        deny_read = out["sandbox"]["filesystem"]["denyRead"]
+        deny = out["permissions"]["deny"]
+        for entry in ("~/.claude/projects/**/*.jsonl", "~/.claude/history.jsonl",
+                      "~/.claude/file-history", "~/.claude/shell-snapshots"):
+            self.assertIn(entry, deny_read)
+            self.assertIn(f"Read({entry})", deny)
+        self.assertIn("Read(~/.claude/file-history/**)", deny)
+        self.assertIn("Read(~/.claude/shell-snapshots/**)", deny)
+        self.assertNotIn("Read(~/.claude/projects/**/*.jsonl/**)", deny)
+        text = repr([r for r in deny if r.startswith("Read(")]) + repr(deny_read)
+        for kept in ("~/.claude/skills", "~/.claude/plugins", "memory", "~/.claude/projects/**'"):
+            self.assertNotIn(kept, text)
+
     def test_plugins_stay_readable(self):
         out = build()
         text = repr(out["permissions"]["deny"]) + repr(out["sandbox"]["filesystem"]["denyRead"])

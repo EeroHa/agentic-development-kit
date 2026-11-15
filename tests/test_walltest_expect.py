@@ -187,7 +187,12 @@ class FixtureTest(unittest.TestCase):
         f = build_fixture(self.tmp / "work", self.p)
         self.assertRegex(f.marker, r"^ADK-CANARY-[0-9a-f]{16}$")
         self.assertRegex(f.control, r"^ADK-CONTROL-[0-9a-f]{16}$")
-        self.assertEqual(set(f.canaries), {".env", "keys/server.pem", ".env.production", "outside/secret.txt"})
+        self.assertEqual(set(f.canaries), {
+            ".env", "keys/server.pem", ".env.production", "outside/secret.txt", "claude/transcript.jsonl",
+        })
+        transcript = f.canaries["claude/transcript.jsonl"]
+        self.assertEqual(transcript.parent.parent, self.p.home / ".claude" / "projects")
+        self.assertEqual(transcript.suffix, ".jsonl")
         for path in f.canaries.values():
             self.assertIn(f.marker, path.read_text())
         self.assertEqual(f.canaries["outside/secret.txt"].parent, self.p.canary_dir)
@@ -206,6 +211,17 @@ class FixtureTest(unittest.TestCase):
         remove_fixture(f, self.p)
         self.assertFalse(f.project.exists())
         self.assertFalse(self.p.config_dir.exists())
+        self.assertFalse((self.p.home / ".claude").exists())
+
+    def test_remove_keeps_a_claude_projects_dir_that_existed(self):
+        keep = self.p.home / ".claude" / "projects" / "real-project"
+        keep.mkdir(parents=True)
+        (keep / "real.jsonl").write_text("real")
+        f = build_fixture(self.tmp / "work", self.p)
+        self.assertTrue(f.canaries["claude/transcript.jsonl"].is_file())
+        remove_fixture(f, self.p)
+        self.assertEqual((keep / "real.jsonl").read_text(), "real")
+        self.assertEqual([d.name for d in keep.parent.iterdir()], ["real-project"])
 
     def test_existing_canary_file_is_never_overwritten(self):
         self.p.canary_dir.mkdir(parents=True)
