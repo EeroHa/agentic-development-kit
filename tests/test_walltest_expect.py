@@ -192,7 +192,7 @@ class FixtureTest(unittest.TestCase):
             self.assertIn(f.marker, path.read_text())
         self.assertEqual(f.canaries["outside/secret.txt"].parent, self.p.canary_dir)
         self.assertIn(f.control, (f.project / "README.md").read_text())
-        self.assertIn(f.control, (f.project / ".env.agent").read_text())
+        self.assertIn(f.control, (f.project / "agent.env").read_text())
         self.assertTrue((f.project / ".git").is_dir())
         self.assertNotIn(f.marker, f.control)
 

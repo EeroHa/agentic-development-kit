@@ -17,10 +17,10 @@
   ],
   "secret_file_names": [
     ".env", ".env.local", ".env.*.local", ".env.development", ".env.production",
-    ".env.staging", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
+    ".env.staging", ".env.*", ".envrc", "*.tfvars", ".dev.vars", "*.env", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
     "id_rsa*", "id_ed25519*", "service-account*.json"
   ],
-  "readable_env_files": [".env.example", ".env.agent"],
+  "readable_env_files": ["agent.env"],
   "env_deny": [
     "SSH_AUTH_SOCK", "GNOME_KEYRING_CONTROL", "DBUS_SESSION_BUS_ADDRESS",
     "ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN",

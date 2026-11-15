@@ -72,7 +72,9 @@ def build_managed_settings(policy: dict, p: Paths, env_names: Iterable[str]) -> 
             "allowUnsandboxedCommands": False,
             "filesystem": {
                 "denyRead": deny_read,
-                "allowRead": _unique(policy["reopen_read"]),
+                "allowRead": _unique(
+                    [*policy["reopen_read"], *(f"~/**/{name}" for name in policy["readable_env_files"])]
+                ),
                 "allowWrite": _unique(policy["reopen_write"]),
             },
             "credentials": {

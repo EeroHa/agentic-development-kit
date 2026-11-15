@@ -53,7 +53,7 @@ def build_fixture(work: Path, p: Paths) -> Fixture:
     )
 
     _write(project / "README.md", f"Fixture project. {control}")
-    _write(project / ".env.agent", f"AGENT_NOTE={control}")
+    _write(project / "agent.env", f"AGENT_NOTE={control}")
     canaries = {
         ".env": project / ".env",
         "keys/server.pem": project / "keys" / "server.pem",

@@ -83,9 +83,9 @@ Measured per name in a fixture (Bash and Read tool agreed on every name):
   `.env.staging`, `.env.production`, `id_rsa`, `id_rsa.pub`, `id_ed25519`, `x/server.key`,
   `cert.p12`, `service-account-prod.json`, `config/secrets.pem`, `keys/server.pem`.
 - readable (not in the list, so a list entry is needed for each): `.env.test`, `.envrc`,
-  `credentials.json`, `secrets.txt`, and the intended `.env.example` and `.env.agent`.
-  `readable_env_files` in the policy is not used by the generator; the readable names stay
-  readable only because no pattern matches them.
+  `credentials.json`, `secrets.txt`, and the intended `.env.example` and `.env.agent`. (Superseded by the fix wave: `.env.*`, `.envrc`, `*.tfvars`, `.dev.vars` and `*.env` are now denied, and the readable file is `agent.env`, re-opened for the sandbox by an `allowRead` glob, which was measured to work.)
+  At the time of measurement `readable_env_files` was not used by the generator; it now is
+  (see above).
 
 **A wildcard `denyRead` entry also masks the target of symlinks it matches.** `~/**/*.pem`
 matched a Steam runtime `cert.pem` symlink under `~` that points at

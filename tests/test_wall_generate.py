@@ -30,7 +30,10 @@ class WallGenerateTest(unittest.TestCase):
         fs = build()["sandbox"]["filesystem"]
         self.assertEqual(fs["denyRead"][0], "~/")
         self.assertEqual(fs["denyRead"][1:1 + len(policy["secret_dirs"])], policy["secret_dirs"])
-        self.assertEqual(fs["allowRead"], policy["reopen_read"])
+        self.assertEqual(
+            fs["allowRead"],
+            policy["reopen_read"] + [f"~/**/{n}" for n in policy["readable_env_files"]],
+        )
         self.assertEqual(fs["allowWrite"], policy["reopen_write"])
 
     def test_ca_bundle_is_reopened(self):
@@ -101,11 +104,20 @@ class WallGenerateTest(unittest.TestCase):
         self.assertNotIn("~/.android/adbkey.pub", deny_read)
         self.assertNotIn("Read(~/.gradle/**)", deny)
 
-    def test_readable_env_files_are_not_denied(self):
+    def test_env_variants_are_denied_and_only_the_agent_file_is_reopened(self):
+        policy = load_policy()
         out = build()
-        text = repr(out["permissions"]["deny"]) + repr(out["sandbox"]["filesystem"]["denyRead"])
-        self.assertNotIn(".env.example", text)
-        self.assertNotIn(".env.agent", text)
+        deny_read = out["sandbox"]["filesystem"]["denyRead"]
+        deny = out["permissions"]["deny"]
+        for name in (".env", ".env.*", ".envrc", "*.tfvars", ".dev.vars", "*.env"):
+            self.assertIn(name, policy["secret_file_names"])
+            self.assertIn("~/**/" + name, deny_read)
+            self.assertIn("Read(//**/" + name + ")", deny)
+        # `*.env` also matches the readable agent file, so the sandbox re-opens it by name.
+        self.assertEqual(policy["readable_env_files"], ["agent.env"])
+        self.assertIn("~/**/agent.env", out["sandbox"]["filesystem"]["allowRead"])
+        self.assertNotIn("Read(//**/agent.env)", deny)
+        self.assertNotIn("~/**/agent.env", deny_read)
 
     def test_edit_deny_rules_cover_settings_mcp_and_git_hooks(self):
         deny = build()["permissions"]["deny"]

@@ -17,7 +17,7 @@ Run every command in this guide from the repo root, `/home/eero/projects/agentic
 Inside the wall, Claude works without asking. The wall is the protection, not the prompts. These things are closed:
 
 - **Your home folder.** Claude's commands see an empty home folder. Only the project folder is visible.
-- **Secret-looking files.** Files named `.env`, `id_rsa`, `*.pem`, `*.key`, `*.p12` and similar cannot be read, by a shell command or by the file tools. Files named `.env.example` and `.env.agent` can be read.
+- **Secret-looking files.** Files named `.env`, `.env.*` (including `.env.example`), `.envrc`, `*.env`, `*.tfvars`, `.dev.vars`, `id_rsa`, `*.pem`, `*.key`, `*.p12` and similar cannot be read, by a shell command or by the file tools. The one exception is a file named `agent.env`: shell commands can read it, the file tools cannot. Put values Claude may see there.
 - **Your `~/.config` and `~/.ssh` folders.** Shell commands cannot see them.
 - **Secret environment variables.** Variables that look like credentials are removed from everything Claude runs. Your SSH agent and D-Bus session are not reachable.
 - **Folders outside the project.** The file tools refuse to read them. Writes outside the project need your approval.

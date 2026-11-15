@@ -136,7 +136,7 @@ def main():
     for tname, path in cfg["write_targets"].items():
         try_write(tname, path, keep=tname in ("write:home", "write:home-claude"))
 
-    for cname, path in (("control:read-readme", "README.md"), ("control:read-env-agent", ".env.agent")):
+    for cname, path in (("control:read-readme", "README.md"), ("control:read-env-agent", "agent.env")):
         try:
             text = open(path, encoding="utf-8").read()
             record(cname, cfg["control"] in text, False, "control found" if cfg["control"] in text else "control missing")
