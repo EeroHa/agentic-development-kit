@@ -46,11 +46,12 @@ Install from a terminal, not from inside a Claude session.
 
 The installer will:
 
-1. Refuse to run if there are uncommitted changes under `adk/` or in `install.sh`. Commit them first.
-2. Show a plan of what it will change.
-3. Ask `Apply? [y/N]`. Read the plan. Type `y` only if it looks right.
-4. Ask for your sudo password. The root part copies files into `/etc` and reloads AppArmor.
-5. Run `adk doctor` at the end.
+1. Refuse to run if there are uncommitted changes under `adk/` or in `install.sh`, including changes hidden with `git update-index`. Commit them first.
+2. Export the committed HEAD into `~/.config/adk/src`, a folder Claude cannot reach. The plan, the user step and the root step all run from that copy, never from the working tree. The script changes into its own folder first, so it works from any directory.
+3. Show a plan of what it will change.
+4. Print the full commit hash and the branch, and ask `Install commit <hash> (<branch>)? [y/N]`. Read the plan. Type `y` only if it looks right.
+5. Ask for your sudo password. The root part copies files into `/etc` and reloads AppArmor.
+6. Run `adk doctor` at the end.
 
 ## Uninstall and the rescue path
 

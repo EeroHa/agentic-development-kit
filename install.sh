@@ -1,39 +1,49 @@
 #!/usr/bin/env bash
-# Install or remove the adk wall. Run from the repo root, in a terminal.
+# Install or remove the adk wall. Run in a terminal; it works from any folder.
 #   ./install.sh            show the plan, ask, then install
 #   ./install.sh uninstall  undo every install step
+#
+# Everything runs from a copy of the committed HEAD exported to ~/.config/adk/src,
+# a folder Claude cannot reach, never from the working tree Claude can write to.
 set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")"
 
+SRC="$HOME/.config/adk/src"
 STAGING="$HOME/.config/adk/staging"
 BACKUPS=/var/backups/agentic-dev-kit
-APPLY_ROOT=adk/install/apply_root.py
+APPLY_ROOT="$SRC/adk/install/apply_root.py"
 PY=/usr/bin/python3
+export PYTHONDONTWRITEBYTECODE=1
+
+# Run the committed copy of export.py: refuses a dirty tree, exports HEAD, prints "<hash> <branch>".
+export_src() {
+  git show HEAD:adk/install/export.py | $PY -I - "$PWD" "$SRC"
+}
+
+adk() {
+  (cd "$SRC" && $PY -m adk "$@")
+}
 
 case "${1:-install}" in
   install)
-    # These files get copied to root-owned locations and one of them runs as root,
-    # so only install a state that has been committed and reviewed.
-    if [ -n "$(git status --porcelain -- adk install.sh)" ]; then
-      echo "Uncommitted changes under adk/ or in install.sh. Review and commit them first." >&2
-      exit 1
-    fi
-    echo "Installing from commit $(git rev-parse --short HEAD) on branch $(git rev-parse --abbrev-ref HEAD)"
-    $PY -m adk install plan
-    read -r -p "Apply? [y/N] " answer
+    exported=$(export_src)
+    read -r commit branch <<<"$exported"
+    echo "Installing commit $commit on branch $branch, exported to $SRC"
+    adk install plan
+    read -r -p "Install commit $commit ($branch)? [y/N] " answer
     [ "$answer" = "y" ] || { echo "Nothing changed."; exit 0; }
-    $PY -m adk install apply-user
+    adk install apply-user
     changed=$(sudo /usr/bin/python3 -I "$APPLY_ROOT" apply "$STAGING" "$BACKUPS")
     echo "$changed"
     if grep -q 'etc/apparmor.d/bwrap' <<<"$changed"; then
       sudo systemctl reload apparmor
     fi
-    if $PY -m adk doctor --help >/dev/null 2>&1; then
-      $PY -m adk doctor
-    fi
+    adk doctor
     ;;
   uninstall)
+    export_src >/dev/null
     sudo /usr/bin/python3 -I "$APPLY_ROOT" restore "$BACKUPS"
-    $PY -m adk install restore-user
+    adk install restore-user
     sudo systemctl reload apparmor
     ;;
   *)
