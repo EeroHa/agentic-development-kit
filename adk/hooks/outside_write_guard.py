@@ -20,6 +20,13 @@ PROTECTED_NAMES: tuple[str, ...] = (
     # core.hooksPath, core.fsmonitor and friends make git run arbitrary commands.
     ".git/config",
 )
+# Files directly in the home folder that a login shell runs unsandboxed.
+HOME_FILES: tuple[str, ...] = (".bashrc", ".bash_profile", ".profile", ".zshrc")
+# Folders under home whose contents run outside the sandbox: startup items, user services,
+# programs ahead of /usr/bin on PATH, and the installed plugins' hooks and skills.
+HOME_TREES: tuple[str, ...] = (
+    ".config/autostart", ".config/systemd/user", ".local/bin", ".claude/plugins",
+)
 
 
 def _temp_roots() -> list[Path]:
@@ -46,6 +53,11 @@ def _is_protected(target: Path, p: Paths) -> bool:
         if parts[-len(want):] == want:
             return True
     if _has_run(parts, (".git", "hooks")):
+        return True
+    home = _res(p.home)
+    if target.parent == home and target.name in HOME_FILES:
+        return True
+    if any(_inside(target, home / tree) for tree in HOME_TREES):
         return True
     for d in (p.config_dir, p.lib_dir, p.managed_dir):
         if _inside(target, _res(d)):

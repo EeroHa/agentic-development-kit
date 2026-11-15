@@ -27,7 +27,7 @@ def reason(result):
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-class GuardTest(unittest.TestCase):
+class GuardBase(unittest.TestCase):
     def setUp(self):
         self._t = tempfile.TemporaryDirectory()
         self.addCleanup(self._t.cleanup)
@@ -42,6 +42,8 @@ class GuardTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+
+class GuardTest(GuardBase):
     def test_inside_project_returns_none(self):
         self.assertIsNone(guard.decide(ev(self.proj, self.proj / "a.py"), self.p))
 
@@ -295,6 +297,54 @@ class RunTest(unittest.TestCase):
             code, out = self.call(text)
         self.assertEqual(code, 0)
         self.assertEqual(decision(json.loads(out)), "ask")
+
+
+class GuardCodePathsTest(GuardBase):
+    """Paths whose contents run outside the sandbox are denied, wherever the project is."""
+
+    def deny_target(self, path, project=None):
+        r = guard.decide(ev(project or self.proj, path), self.p)
+        self.assertIsNotNone(r, path)
+        self.assertEqual(decision(r), "deny", path)
+        self.assertIn("protected configuration path", reason(r))
+
+    def test_shell_profiles_directly_in_home_are_denied(self):
+        for name in (".bashrc", ".bash_profile", ".profile", ".zshrc"):
+            self.deny_target(self.p.home / name)
+
+    def test_shell_profiles_are_denied_when_the_project_is_home(self):
+        self.p.home.mkdir()
+        self.deny_target(self.p.home / ".bashrc", project=self.p.home)
+        self.deny_target(".zshrc", project=self.p.home)
+
+    def test_profile_named_files_elsewhere_are_not_protected(self):
+        self.assertIsNone(guard.decide(ev(self.proj, self.proj / ".bashrc"), self.p))
+        self.assertIsNone(guard.decide(ev(self.proj, self.proj / "sub" / ".profile"), self.p))
+        r = guard.decide(ev(self.proj, self.p.home / "sub" / ".bashrc"), self.p)
+        self.assertEqual(decision(r), "ask")
+
+    def test_startup_service_path_and_plugin_trees_are_denied(self):
+        for rel in (
+            ".config/autostart/x.desktop", ".config/autostart/sub/y.desktop",
+            ".config/systemd/user/a.service", ".config/systemd/user/a.service.d/o.conf",
+            ".local/bin/git", ".local/bin/sub/tool",
+            ".claude/plugins/cache/x/hooks/hooks.json", ".claude/plugins/installed.json",
+        ):
+            self.deny_target(self.p.home / rel)
+
+    def test_neighbours_of_those_trees_are_not_protected_by_this_rule(self):
+        for rel in (".config/other/x", ".local/share/x", ".claude/skills/x/SKILL.md", ".config/systemd/x"):
+            r = guard.decide(ev(self.proj, self.p.home / rel), self.p)
+            self.assertEqual(decision(r), "ask", rel)
+
+    def test_symlink_into_a_protected_home_tree_is_denied(self):
+        (self.p.home / ".local" / "bin").mkdir(parents=True)
+        (self.proj / "bin-link").symlink_to(self.p.home / ".local" / "bin")
+        self.deny_target(self.proj / "bin-link" / "git")
+
+    def test_notebook_edit_is_guarded_too(self):
+        r = guard.decide(ev(self.proj, self.p.home / ".bashrc", tool="NotebookEdit"), self.p)
+        self.assertEqual(decision(r), "deny")
 
 
 if __name__ == "__main__":

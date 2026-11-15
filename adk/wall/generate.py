@@ -14,6 +14,16 @@ EDIT_DENY: tuple[str, ...] = (
     "Edit(//**/.git/hooks/**)",
     "Edit(//**/.git/config)",
     "Edit(~/.config/adk/**)",
+    # Programs that run unsandboxed: shell profiles, startup items, user services,
+    # ~/.local/bin (ahead of /usr/bin on PATH) and the installed plugins.
+    "Edit(~/.bashrc)",
+    "Edit(~/.bash_profile)",
+    "Edit(~/.profile)",
+    "Edit(~/.zshrc)",
+    "Edit(~/.config/autostart/**)",
+    "Edit(~/.config/systemd/user/**)",
+    "Edit(~/.local/bin/**)",
+    "Edit(~/.claude/plugins/**)",
 )
 
 

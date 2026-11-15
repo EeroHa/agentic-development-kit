@@ -131,6 +131,21 @@ class WallGenerateTest(unittest.TestCase):
         ):
             self.assertIn(rule, deny)
 
+    def test_edit_deny_rules_cover_code_that_runs_outside_the_sandbox(self):
+        deny = build()["permissions"]["deny"]
+        for rule in (
+            "Edit(~/.bashrc)", "Edit(~/.bash_profile)", "Edit(~/.profile)", "Edit(~/.zshrc)",
+            "Edit(~/.config/autostart/**)", "Edit(~/.config/systemd/user/**)",
+            "Edit(~/.local/bin/**)", "Edit(~/.claude/plugins/**)",
+        ):
+            self.assertIn(rule, deny)
+
+    def test_plugins_stay_readable(self):
+        out = build()
+        text = repr(out["permissions"]["deny"]) + repr(out["sandbox"]["filesystem"]["denyRead"])
+        self.assertNotIn("Read(~/.claude/plugins", text)
+        self.assertNotIn("~/.claude/plugins/**'", repr(out["sandbox"]["filesystem"]["denyRead"]))
+
     def test_permissions_flags(self):
         perms = build()["permissions"]
         self.assertIs(perms["blockReadsOutsideWorkingDirectories"], True)
