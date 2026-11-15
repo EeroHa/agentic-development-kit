@@ -35,6 +35,7 @@ Read this part too. The wall is against Claude. It is not a guarantee against ev
 - **You.** You have root. You can always change the managed settings. The wall is not built against you.
 - **Connectors and integrations.** Claude.ai connectors act with the access you gave them. They are not inside the sandbox.
 - **Things on your machine outside Claude.** The wall does not stop you or other programs from using your files.
+- **Where you start Claude.** Start Claude in a project folder, not in your home folder or in `~/projects`. The folder you start in is the one place the wall leaves open: Claude can read and write all of it. If you start in your home folder or in `~/projects`, everything inside is open, and only the list of secret-looking names protects your files, for shell commands and for the file tools alike.
 
 ## Install
 
