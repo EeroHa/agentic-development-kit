@@ -82,6 +82,25 @@ class WallGenerateTest(unittest.TestCase):
         self.assertEqual(len(deny), len(set(deny)))
         self.assertEqual(len(deny_read), len(set(deny_read)))
 
+    def test_secret_files_inside_reopened_tool_folders_stay_closed(self):
+        policy = load_policy()
+        out = build()
+        deny_read = out["sandbox"]["filesystem"]["denyRead"]
+        deny = out["permissions"]["deny"]
+        for parent, name in (("~/.android", "adbkey"), ("~/.gradle", "gradle.properties")):
+            entry = f"{parent}/{name}"
+            self.assertIn(parent, policy["reopen_read"])  # the folder is re-opened ...
+            self.assertIn(entry, policy["secret_dirs"])   # ... and the secret file stays closed
+            self.assertIn(entry, deny_read)
+            self.assertIn(f"Read({entry})", deny)
+        # A name without an extension also gets a /** rule (harmless for a file);
+        # a file with an extension gets only the exact rule.
+        self.assertIn("Read(~/.android/adbkey/**)", deny)
+        self.assertNotIn("Read(~/.gradle/gradle.properties/**)", deny)
+        # The public half and the rest of the folders are not denied.
+        self.assertNotIn("~/.android/adbkey.pub", deny_read)
+        self.assertNotIn("Read(~/.gradle/**)", deny)
+
     def test_readable_env_files_are_not_denied(self):
         out = build()
         text = repr(out["permissions"]["deny"]) + repr(out["sandbox"]["filesystem"]["denyRead"])

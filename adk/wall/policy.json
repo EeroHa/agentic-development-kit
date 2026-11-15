@@ -12,7 +12,8 @@
     "~/.claude.json", "~/.npmrc", "~/.netrc", "~/.git-credentials", "~/.pki",
     "~/.password-store", "~/.local/share/keyrings", "~/.mozilla",
     "~/.config/google-chrome", "~/.config/chromium", "~/snap", "~/.expo",
-    "~/.gk", "~/.rest-client"
+    "~/.gk", "~/.rest-client",
+    "~/.android/adbkey", "~/.gradle/gradle.properties"
   ],
   "secret_file_names": [
     ".env", ".env.local", ".env.*.local", ".env.development", ".env.production",
