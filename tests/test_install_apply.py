@@ -7,6 +7,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from adk import cli
 from adk.install import apply_root, apply_user
@@ -33,6 +34,7 @@ def snapshot(base: Path) -> dict:
 
 class InstallTestBase(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))  # folders the tests create look like root's
         self._t = tempfile.TemporaryDirectory()
         self.addCleanup(self._t.cleanup)
         self.tmp = Path(self._t.name).resolve()
@@ -182,10 +184,63 @@ class ApplyRootTest(InstallTestBase):
         self.assertEqual(stat.S_IMODE(self.p.managed_dir.stat().st_mode), 0o755)
 
 
+class ApplyRootOwnershipTest(InstallTestBase):
+    def test_existing_folders_inside_the_allowed_locations_are_set_to_0755(self):
+        self.p.managed_dir.mkdir(parents=True)
+        self.p.managed_dir.chmod(0o777)
+        lib_adk = self.p.lib_dir / "adk"
+        lib_adk.mkdir(parents=True)
+        self.p.lib_dir.chmod(0o770)
+        lib_adk.chmod(0o777)
+        self.apply()
+        for d in (self.p.managed_dir, self.p.lib_dir, lib_adk):
+            self.assertEqual(stat.S_IMODE(d.stat().st_mode), 0o755, d)
+
+    def test_folders_outside_the_allowed_locations_are_left_alone(self):
+        (self.root / "etc").chmod(0o700)
+        (self.root / "usr/local/bin").chmod(0o711)
+        self.apply()
+        self.assertEqual(stat.S_IMODE((self.root / "etc").stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((self.root / "usr/local/bin").stat().st_mode), 0o711)
+
+    def test_a_symlinked_folder_inside_the_allowed_locations_is_refused(self):
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        elsewhere.chmod(0o700)
+        self.p.lib_dir.symlink_to(elsewhere)
+        with self.assertRaises(OSError):
+            self.apply()
+        self.assertEqual(list(elsewhere.iterdir()), [])
+        self.assertEqual(stat.S_IMODE(elsewhere.stat().st_mode), 0o700)
+
+    def test_as_root_folders_and_files_are_chowned_to_root(self):
+        self.p.lib_dir.mkdir(parents=True)
+        with mock.patch.object(os, "geteuid", return_value=0), \
+                mock.patch.object(os, "fchown") as fchown, mock.patch.object(os, "lchown") as lchown:
+            self.apply()
+        self.assertTrue(fchown.called)  # the pre-existing lib_dir
+        self.assertTrue(all(c.args[1:] == (0, 0) for c in fchown.call_args_list))
+        self.assertTrue(lchown.called)  # new folders and every written file
+        self.assertTrue(all(c.args[1:] == (0, 0) for c in lchown.call_args_list))
+
+    def test_as_root_a_file_owned_by_someone_else_is_rewritten_even_if_identical(self):
+        self.apply()
+        target = self.p.managed_dropin
+        mtime = target.stat().st_mtime_ns
+        self.assertEqual(self.apply(), [])  # not root: identical content and mode is enough
+        with mock.patch.object(os, "geteuid", return_value=0), \
+                mock.patch.object(os, "fchown"), mock.patch.object(os, "lchown") as lchown:
+            changed = self.apply()  # the files belong to this (non-root) user, so they are not root's
+        self.assertIn(str(target), changed)
+        self.assertIn(str(self.p.bin_link), changed)
+        self.assertGreater(target.stat().st_mtime_ns, mtime)
+        self.assertTrue(lchown.called)
+
+
 class ApplyRootRefusalTest(InstallTestBase):
     def assert_refused_and_nothing_written(self, staging):
         before = snapshot(self.root)
-        with self.assertRaises(ValueError):
+        with self.assertRaises((ValueError, OSError)):
             apply_root.apply(staging, self.p.root_backups_dir, self.p.root)
         self.assertEqual(snapshot(self.root), before)
         self.assertEqual(self.backup_sets(), [])
@@ -217,7 +272,7 @@ class ApplyRootRefusalTest(InstallTestBase):
                      "relative/dest"):
             with self.subTest(dest=dest):
                 staging = self.manifest_staging(
-                    [self.entry("usr/local/bin/adk", None, 0o777, link_to=dest)])
+                    [self.entry("usr/local/bin/adk", None, 0o755, link_to=dest)])
                 self.assert_refused_and_nothing_written(staging)
                 (staging / "manifest.json").unlink()
                 staging.rmdir()
@@ -230,6 +285,54 @@ class ApplyRootRefusalTest(InstallTestBase):
     def test_bad_modes_are_refused(self):
         staging = self.manifest_staging(
             [self.entry("etc/claude-code/a.json", mode=0o4755)], {"0000": b"x"})
+        self.assert_refused_and_nothing_written(staging)
+
+    def test_modes_with_group_or_other_write_are_refused(self):
+        for mode in (0o666, 0o664, 0o646, 0o775, 0o757, 0o777, 0o020, 0o002):
+            with self.subTest(mode=oct(mode)):
+                staging = self.manifest_staging(
+                    [self.entry("etc/claude-code/a.json", mode=mode)], {"0000": b"x"})
+                self.assert_refused_and_nothing_written(staging)
+                (staging / "0000").unlink()
+                (staging / "manifest.json").unlink()
+                staging.rmdir()
+
+    def test_modes_without_group_or_other_write_are_accepted(self):
+        for mode in (0o644, 0o755, 0o600, 0o640, 0o750, 0o400):
+            with self.subTest(mode=oct(mode)):
+                staging = self.manifest_staging(
+                    [self.entry("etc/claude-code/a.json", mode=mode)], {"0000": b"x"})
+                apply_root.apply(staging, self.p.root_backups_dir, self.p.root)
+                self.assertEqual(stat.S_IMODE((self.root / "etc/claude-code/a.json").stat().st_mode), mode)
+                (self.root / "etc/claude-code/a.json").chmod(0o600)
+                (self.root / "etc/claude-code/a.json").unlink()
+                (staging / "0000").unlink()
+                (staging / "manifest.json").unlink()
+                staging.rmdir()
+
+    def test_the_plan_gives_the_bin_link_a_mode_apply_root_accepts(self):
+        for c in build_plan(self.p, self.repo, []):
+            if c.scope == "root":
+                self.assertEqual(c.mode & 0o022, 0, c.target)
+
+    def test_payload_that_is_a_symlink_is_refused(self):
+        secret = self.tmp / "secret-file"
+        secret.write_text("TOP SECRET\n")
+        staging = self.manifest_staging([self.entry("etc/claude-code/a.json")])
+        (staging / "0000").symlink_to(secret)
+        self.assert_refused_and_nothing_written(staging)
+
+    def test_payload_that_is_not_a_regular_file_is_refused(self):
+        staging = self.manifest_staging([self.entry("etc/claude-code/a.json")])
+        os.mkfifo(staging / "0000")  # must not block while opening
+        self.assert_refused_and_nothing_written(staging)
+
+    def test_manifest_that_is_a_symlink_is_refused(self):
+        staging = self.tmp / "evil-staging"
+        staging.mkdir()
+        real = self.tmp / "real-manifest.json"
+        real.write_text("[]")
+        (staging / "manifest.json").symlink_to(real)
         self.assert_refused_and_nothing_written(staging)
 
     def test_command_line_refusal_exits_1_and_writes_nothing(self):

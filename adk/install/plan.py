@@ -85,7 +85,7 @@ def build_plan(p: Paths, repo: Path, env_names: Iterable[str]) -> list[FileChang
              for t in _stale_files(lib_pkg, {t for t, _ in copied})]
     root += [
         FileChange(launcher, LAUNCHER.replace("<LIB>", str(p.lib_dir)).encode(), 0o755, "root"),
-        FileChange(p.bin_link, b"", 0o777, "root", link_to=launcher),
+        FileChange(p.bin_link, b"", 0o755, "root", link_to=launcher),
         FileChange(p.managed_dropin, dropin.encode(), 0o644, "root"),
     ]
 

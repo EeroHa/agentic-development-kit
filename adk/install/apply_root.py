@@ -28,18 +28,34 @@ def _check_target(rel) -> str:
     return rel
 
 
-def _mkdirs(d: Path) -> None:
-    if not d.is_dir():
-        _mkdirs(d.parent)
-        d.mkdir()
-        d.chmod(0o755)
-        if os.geteuid() == 0:
-            os.lchown(d, 0, 0)
+def _read_regular(path: Path) -> bytes:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # a symlink at the end raises OSError
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise ValueError(f"not a regular file: {path.name}")
+        return f.read()
 
 
-def _put(dest: Path, want: tuple) -> None:
+def _mkdirs(d: Path, root: Path | None = None) -> None:
+    """Create d. With root, an existing folder inside the allowed locations becomes 0755 root:root."""
+    if os.path.lexists(d):
+        if root is not None and d != root and _inside(PurePosixPath(d.relative_to(root))):
+            fd = os.open(d, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)  # refuses a symlink
+            os.fchmod(fd, 0o755)
+            if os.geteuid() == 0:
+                os.fchown(fd, 0, 0)
+            os.close(fd)
+        return
+    _mkdirs(d.parent, root)
+    d.mkdir()
+    d.chmod(0o755)
+    if os.geteuid() == 0:
+        os.lchown(d, 0, 0)
+
+
+def _put(dest: Path, want: tuple, root: Path | None = None) -> None:
     """Atomically make dest a file ("file", bytes, mode) or a symlink ("link", to)."""
-    _mkdirs(dest.parent)
+    _mkdirs(dest.parent, root)
     fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=".adk-")
     try:
         with os.fdopen(fd, "wb") as f:
@@ -59,10 +75,14 @@ def _put(dest: Path, want: tuple) -> None:
 
 
 def _state(dest: Path):
+    """What dest holds now. As root, an entry owned by anyone else never matches, so it is rewritten."""
+    if not os.path.lexists(dest):
+        return None
+    extra = ("foreign owner",) if os.geteuid() == 0 and os.lstat(dest).st_uid != 0 else ()
     if dest.is_symlink():
-        return ("link", os.readlink(dest))
+        return ("link", os.readlink(dest), *extra)
     if dest.is_file():
-        return ("file", dest.read_bytes(), stat.S_IMODE(dest.stat().st_mode))
+        return ("file", dest.read_bytes(), stat.S_IMODE(dest.stat().st_mode), *extra)
     return None
 
 
@@ -70,10 +90,10 @@ def _load(staging: Path, root: Path) -> list[tuple]:
     """Check the whole manifest and read its payloads before anything is written."""
     ops = []
     try:
-        for e in json.loads((staging / "manifest.json").read_text()):
+        for e in json.loads(_read_regular(staging / "manifest.json")):
             rel, mode, link, name = _check_target(e["target"]), e["mode"], e["link_to"], e["payload"]
-            if not isinstance(mode, int) or not 0 <= mode <= 0o777:
-                raise ValueError(f"bad mode for {rel}")
+            if not isinstance(mode, int) or mode & ~0o755:
+                raise ValueError(f"bad mode for {rel}: group or other may not write")
             if e["remove"]:
                 want = None
             elif link is not None:
@@ -82,9 +102,9 @@ def _load(staging: Path, root: Path) -> list[tuple]:
                     raise ValueError(f"refusing link destination: {link}")
                 want = ("link", link)
             else:
-                if Path(name).name != name or (staging / name).is_symlink():
+                if Path(name).name != name:
                     raise ValueError(f"bad payload name: {name!r}")
-                want = ("file", (staging / name).read_bytes(), mode)
+                want = ("file", _read_regular(staging / name), mode)
             ops.append((rel, want))
     except (KeyError, TypeError, AttributeError) as err:
         raise ValueError(f"malformed manifest: {err!r}") from err
@@ -112,7 +132,7 @@ def apply(staging: Path, backups: Path, root: Path = Path("/")) -> list[str]:
             if want is None:
                 os.unlink(dest)
             else:
-                _put(dest, want)
+                _put(dest, want, root)
             changed.append(str(dest))
     finally:
         for name, data in (("links.json", links), ("created.json", created)):
@@ -147,9 +167,9 @@ def restore(backups: Path, root: Path = Path("/")) -> list[str]:
                 os.unlink(root / rel)
             _prune((root / rel).parent, root)
         for rel, to in links.items():
-            _put(root / rel, ("link", to))
+            _put(root / rel, ("link", to), root)
         for rel, f in files.items():
-            _put(root / rel, _state(f))
+            _put(root / rel, _state(f), root)
         restored += [str(root / rel) for rel in [*created, *links, *files]]
         shutil.rmtree(bdir)
     if sets:
