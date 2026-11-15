@@ -11,9 +11,16 @@ from adk.hooks.common import deny, run
 from adk.paths import Paths
 from adk.state import load_lists
 
+# The first two prefixes were verified. The other three are UNVERIFIED guesses at the tool
+# names of the Claude desktop browser pane and of a linked computer ("remote devices"); they
+# were not seen on the Linux CLI. The browser pane is controlled by the same switch as Chrome.
+# Keep the PreToolUse matcher in adk/wall/generate.py in step with this list.
 PREFIXES: tuple[tuple[str, str], ...] = (
     ("mcp__claude-in-chrome__", "chrome"),
     ("mcp__computer-use__", "computer-use"),
+    ("mcp__Claude_Browser__", "chrome"),
+    ("mcp__remote-devices__Claude_Browser__", "chrome"),
+    ("mcp__remote-devices__computer_", "computer-use"),
 )
 
 

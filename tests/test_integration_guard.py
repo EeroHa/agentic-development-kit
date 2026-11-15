@@ -39,6 +39,28 @@ class IntegrationGuardTest(unittest.TestCase):
         for tool in ("Write", "Bash", "mcp__other__thing", "", None, 5):
             self.assertIsNone(guard.decide(ev(self.proj, tool), self.p), repr(tool))
 
+    def test_browser_pane_tools_follow_the_chrome_switch(self):
+        for tool in ("mcp__Claude_Browser__navigate", "mcp__remote-devices__Claude_Browser__navigate"):
+            r = guard.decide(ev(self.proj, tool), self.p)
+            self.assertEqual(decision(r), "deny", tool)
+            self.assertIn("adk integration on chrome", reason(r))
+        state.set_integration(self.p, self.proj, "chrome", True)
+        for tool in ("mcp__Claude_Browser__navigate", "mcp__remote-devices__Claude_Browser__navigate"):
+            self.assertIsNone(guard.decide(ev(self.proj, tool), self.p), tool)
+
+    def test_remote_computer_tools_follow_the_computer_use_switch(self):
+        tool = "mcp__remote-devices__computer_screenshot"
+        r = guard.decide(ev(self.proj, tool), self.p)
+        self.assertEqual(decision(r), "deny")
+        self.assertIn("adk integration on computer-use", reason(r))
+        state.set_integration(self.p, self.proj, "chrome", True)  # the other switch does not help
+        self.assertEqual(decision(guard.decide(ev(self.proj, tool), self.p)), "deny")
+        state.set_integration(self.p, self.proj, "computer-use", True)
+        self.assertIsNone(guard.decide(ev(self.proj, tool), self.p))
+
+    def test_other_remote_device_tools_are_not_touched(self):
+        self.assertIsNone(guard.decide(ev(self.proj, "mcp__remote-devices__list_devices"), self.p))
+
     def test_chrome_off_denies_and_names_command(self):
         r = guard.decide(ev(self.proj, CHROME), self.p)
         self.assertEqual(decision(r), "deny")

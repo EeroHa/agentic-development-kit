@@ -174,7 +174,11 @@ class WallGenerateTest(unittest.TestCase):
         pre = build()["hooks"]["PreToolUse"]
         self.assertEqual(
             [h["matcher"] for h in pre],
-            ["Edit|Write|NotebookEdit", "mcp__(claude-in-chrome|computer-use)__.*"],
+            [
+                "Edit|Write|NotebookEdit",
+                "mcp__(claude-in-chrome__|computer-use__|Claude_Browser__"
+                "|remote-devices__Claude_Browser__|remote-devices__computer_).*",
+            ],
         )
         scripts = ["outside_write_guard.py", "integration_guard.py"]
         for entry, script in zip(pre, scripts):
@@ -189,6 +193,15 @@ class WallGenerateTest(unittest.TestCase):
             self.assertTrue(Path(hook["args"][1]).is_relative_to(P.lib_dir))
             self.assertEqual(hook["timeout"], 10)
             self.assertEqual(hook["onFailure"], "block")
+
+    def test_integration_matcher_covers_every_guard_prefix(self):
+        import re
+        from adk.hooks.integration_guard import PREFIXES
+        matcher = build()["hooks"]["PreToolUse"][1]["matcher"]
+        for prefix, _name in PREFIXES:
+            self.assertTrue(re.fullmatch(matcher, prefix + "anything"), prefix)
+        for other in ("mcp__other__thing", "Write", "mcp__remote-devices__other_x"):
+            self.assertFalse(re.fullmatch(matcher, other), other)
 
     def test_marketplaces_restriction_comes_from_policy(self):
         self.assertEqual(

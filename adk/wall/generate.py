@@ -109,7 +109,13 @@ def build_managed_settings(policy: dict, p: Paths, env_names: Iterable[str]) -> 
                     "hooks": [_hook(p, "outside_write_guard.py")],
                 },
                 {
-                    "matcher": "mcp__(claude-in-chrome|computer-use)__.*",
+                    # The last three alternatives are unverified tool names (see
+                    # adk/hooks/integration_guard.py); the guard returns no opinion for any
+                    # other name, so a wrong guess costs nothing.
+                    "matcher": (
+                        "mcp__(claude-in-chrome__|computer-use__|Claude_Browser__"
+                        "|remote-devices__Claude_Browser__|remote-devices__computer_).*"
+                    ),
                     "hooks": [_hook(p, "integration_guard.py")],
                 },
             ],
