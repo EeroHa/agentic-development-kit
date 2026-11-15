@@ -14,8 +14,8 @@ Commands (run as `python3 -m adk <command>`):
 - `allow-dir DIR` / `never-dir DIR`: add a folder to the allow or never list (`--remove` undoes it).
 - `reopen DIR`: re-open a closed tool folder (`--write` also allows writes, `--remove` closes it again).
 - `integration on|off chrome|computer-use`: switch an integration on or off for one project (`--project DIR`).
-- `install plan|apply-user|restore-user`: used by `./install.sh`; you normally do not run these yourself.
+- `install plan|apply-user|restore-user`: used by `install.sh`; you normally do not run these yourself.
 - `wall-test`: run the wall test (two short headless Haiku sessions, so it uses quota).
 - `doctor`: check the wall is installed and working (`--quick` skips the wall test).
 
-Install with `./install.sh` and remove with `./install.sh uninstall`, both from a terminal.
+Install with `install.sh <commit-hash>` and remove with `install.sh uninstall <commit-hash>`, both from a terminal and only from the extracted copy of the reviewed commit. See `docs/operating-the-wall.md`.

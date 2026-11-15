@@ -41,30 +41,44 @@ Read this part too. The wall is against Claude. It is not a guarantee against ev
 
 Install from a terminal, not from inside a Claude session.
 
+The installer installs only a commit you name. You type its full 40-character hash, after you have reviewed that commit. Nothing from the working tree is ever copied to a system folder or run as root, because Claude Code can write to the working tree.
+
+Get the hash of the commit you reviewed with `git -C ~/projects/agentic-dev-kit log -1 --format=%H <branch>` or from `git log`, and read what it changes. Then run the copy of `install.sh` that belongs to that commit, not the working-tree copy:
+
 ```
-./install.sh
+export TMPDIR=${TMPDIR:-/tmp}
+rm -rf "$TMPDIR/adk-install" && mkdir -m 700 "$TMPDIR/adk-install"
+git -C ~/projects/agentic-dev-kit archive <hash> install.sh adk | tar -x -C "$TMPDIR/adk-install" && "$TMPDIR/adk-install/install.sh" <hash>
 ```
+
+Replace `<hash>` with the full hash in both places. `install.sh` without a hash, or with anything that is not 40 lowercase hex characters, prints this usage and exits with code 2.
+
+Why the extracted copy: `install.sh` itself lives in the working tree, and an edited copy could skip every check. At its start `install.sh` compares its own bytes and `adk/install/export.py` with the copies in the commit and refuses on any difference or if it cannot check. That is a tripwire, not a guarantee: a changed script can simply leave the check out. Only the extracted copy is safe to run.
 
 The installer will:
 
-1. Refuse to run if there are uncommitted changes under `adk/` or in `install.sh`, including changes hidden with `git update-index`. Commit them first.
-2. Export the committed HEAD into `~/.config/adk/src`, a folder Claude cannot reach. The plan, the user step and the root step all run from that copy, never from the working tree. The script changes into its own folder first, so it works from any directory.
-3. Show a plan of what it will change.
-4. Print the full commit hash and the branch, and ask `Install commit <hash> (<branch>)? [y/N]`. Read the plan. Type `y` only if it looks right.
-5. Ask for your sudo password. The root part copies files into `/etc` and reloads AppArmor.
-6. Run `adk doctor` at the end.
+1. Refuse to run if the repository has any `refs/replace` entry (`git replace`). Such an entry makes git show other file contents under the same hash.
+2. Refuse if the hash is not a commit in the repository (it looks in the current folder's repository, in `$ADK_REPO`, then in `~/projects/agentic-dev-kit`).
+3. Print the full hash and the commit subject, and ask `Install commit <hash> (<subject>)? [y/N]`. Only `y` continues. Nothing from the commit has run yet.
+4. Export that commit's `adk/` and `install.sh` into `~/.config/adk/src`, a folder Claude cannot reach. It refuses if the exported files are not exactly the commit's files with the commit's contents (this catches `export-ignore` rules that silently drop files), or if the folder is not owned by you or is writable by anyone else.
+5. Show the plan and ask `Apply the plan above? [y/N]`. The plan, the user step, the root step and `adk doctor` all run from the exported copy. Before each root step the copy is checked again.
+6. Ask for your sudo password. The root part copies files into `/etc` and reloads AppArmor.
 
 ## Uninstall and the rescue path
 
 Use this when the wall blocks everything, including sessions that should start normally. The uninstall does not need Claude.
 
+It also needs a commit hash, and it runs the root restore from that commit's export, the same way as the install. Use the hash of the commit you installed, or any reviewed commit:
+
 ```
-./install.sh uninstall
+export TMPDIR=${TMPDIR:-/tmp}
+rm -rf "$TMPDIR/adk-install" && mkdir -m 700 "$TMPDIR/adk-install"
+git -C ~/projects/agentic-dev-kit archive <hash> install.sh adk | tar -x -C "$TMPDIR/adk-install" && "$TMPDIR/adk-install/install.sh" uninstall <hash>
 ```
 
-It restores the files it backed up, removes the user-level changes, and reloads AppArmor. Run it from a plain terminal. It asks for your sudo password.
+It shows the hash and subject, asks `Uninstall commit <hash> (<subject>)? [y/N]`, restores the files it backed up, removes the user-level changes, and reloads AppArmor. Run it from a plain terminal. It asks for your sudo password.
 
-After uninstalling, run `python3 -m adk doctor` to check the state. If you want the wall back, run `./install.sh` again.
+After uninstalling, run `python3 -m adk doctor` to check the state. If you want the wall back, install a reviewed commit again.
 
 ## Running a command inside a Claude session: the `!` prefix
 
@@ -100,7 +114,7 @@ Every command is `python3 -m adk <command>`. Run `python3 -m adk --help` for the
   ```
   python3 -m adk integration on chrome --project ~/projects/my-app
   ```
-- **`install`** has three parts: `plan`, `apply-user` and `restore-user`. You normally do not run them yourself. `./install.sh` runs `plan` and `apply-user`, and `./install.sh uninstall` runs `restore-user`.
+- **`install`** has three parts: `plan`, `apply-user` and `restore-user`. You normally do not run them yourself. `install.sh <hash>` runs `plan` and `apply-user`, and `install.sh uninstall <hash>` runs `restore-user`, both from the exported copy.
   ```
   python3 -m adk install plan
   ```
