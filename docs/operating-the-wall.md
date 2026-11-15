@@ -53,13 +53,24 @@ Install from a terminal, not from inside a Claude session.
 
 The installer installs only a commit you name. You type its full 40-character hash, after you have reviewed that commit. Nothing from the working tree is ever copied to a system folder or run as root, because Claude Code can write to the working tree.
 
-Get the hash of the commit you reviewed with `git -C ~/projects/agentic-dev-kit log -1 --format=%H <branch>` or from `git log`, and read what it changes. Check the hash against the log by eye, because the first run (below) trusts the repository at that path. Then paste this, with `<hash>` replaced by the full hash:
+Get the hash of the commit you reviewed from a terminal, with the repository's own `.git` checked first. `.git/commondir` lets git read its config and hooks from a folder Claude Code can write, and git runs that config (a pager, for example) as you, so test for it before any git command. This line prints nothing and runs no git if `commondir`, `info/grafts` or `shallow` exists:
+
+```
+R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}
+[ -z "$(ls -d "$R/.git/commondir" "$R/.git/info/grafts" "$R/.git/shallow" 2>/dev/null)" ] && GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git --git-dir="$R/.git" --no-pager -c core.pager=cat -c core.fsmonitor=false -c core.hooksPath=/dev/null log -1 --format=%H <branch>
+```
+
+Read what the commit changes, then check the hash against the log by eye, because the first run (below) trusts the repository at that path. Then paste this, with `<hash>` replaced by the full hash:
 
 ```
 H=<hash>; R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}; D=$HOME/.config/adk/install-$H
 /usr/bin/python3 -I -B -E -s - "$R" "$D" "$H" <<"PY" && "$D/src/install.sh" "$H"
 # bootstrap.py: the first verified read of the installer one-liner. Standard library only.
 # Run as: /usr/bin/python3 -I -B -E -s bootstrap.py <repo> <dest> <40-hex-commit>
+# Before any git command it refuses a .git that is not a plain folder, or that holds commondir,
+# info/grafts, shallow, a non-empty alternates file or refs/replace entries: git would run config
+# or hooks, or read objects, from a place Claude Code controls. Git then runs with no system or
+# global config, no pager, no fsmonitor and no hooks.
 # It reads the commit, its tree, the adk and adk/install trees and the blob adk/install/export.py
 # through ONE `git cat-file --batch` process, each object once. It recomputes every object id as
 # sha1("<type> <len>" + NUL + data) and refuses on any difference. Only then does it write
@@ -81,14 +92,36 @@ def tree_entries(data):
         i = nul + 21
     return out
 
+def refuse_redirects(git_dir):
+    if os.path.islink(git_dir) or not os.path.isdir(git_dir):
+        refuse(git_dir + " is not a plain folder")
+    for rel in ("commondir", "info/grafts", "shallow"):
+        if os.path.lexists(os.path.join(git_dir, rel)):
+            refuse(rel + " exists in " + git_dir)
+    alt = os.path.join(git_dir, "objects", "info", "alternates")
+    if os.path.lexists(alt) and (os.path.islink(alt) or not os.path.isfile(alt) or os.path.getsize(alt) != 0):
+        refuse(alt + " is not an empty file")
+    replace = os.path.join(git_dir, "refs", "replace")
+    if os.path.lexists(replace) and (os.path.islink(replace) or not os.path.isdir(replace) or os.listdir(replace)):
+        refuse(replace + " has entries")
+    try:
+        with open(os.path.join(git_dir, "packed-refs"), "rb") as f:
+            if b"refs/replace/" in f.read():
+                refuse("packed-refs has refs/replace entries")
+    except FileNotFoundError:
+        pass
+
 def main(repo, dest, commit):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         refuse("the commit must be 40 lowercase hex characters")
     git_dir = os.path.join(repo, ".git")
+    refuse_redirects(git_dir)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1")
+    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
+               GIT_NO_LAZY_FETCH="1")
+    cmd = ["git", "--no-pager", "-c", "core.pager=cat", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
     try:
-        session = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE,
+        session = subprocess.Popen(cmd + ["cat-file", "--batch"], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd=repo)
     except OSError as err:
         refuse("cannot start git: %s" % err)
@@ -144,21 +177,23 @@ PY
 
 What the paste does, and what it trusts:
 
-1. The first command is the Python code in the paste (the same text as `adk/install/bootstrap.py`; read it, because it is the first thing that runs). It starts one `git cat-file --batch` and reads through it the typed commit, its tree, the `adk` tree, the `adk/install` tree and the file `adk/install/export.py`, each object once. It recomputes every object's hash itself and refuses on any difference, so a swapped object cannot slip in between a check and a read. The code never uses `git show`, `git cat-file blob` or `git fsck` to get code.
+1. The first command is the Python code in the paste (the same text as `adk/install/bootstrap.py`; read it, because it is the first thing that runs). Before it starts any git command it refuses a `.git` that is not a plain folder, or that holds `commondir`, `info/grafts`, `shallow`, an `objects/info/alternates` that is not an empty file, or `refs/replace` entries. Then it starts one `git cat-file --batch`, with `--no-pager`, `core.pager=cat`, `core.fsmonitor=false`, `core.hooksPath=/dev/null` and no system or global git config, and reads through it the typed commit, its tree, the `adk` tree, the `adk/install` tree and the file `adk/install/export.py`, each object once. It recomputes every object's hash itself and refuses on any difference, so a swapped object cannot slip in between a check and a read. The code never uses `git show`, `git cat-file blob` or `git fsck` to get code.
 2. It writes those verified bytes of `export.py` to `~/.config/adk/install-<hash>/`, a new folder only you can write, and runs them. This is the first run, and it is the one weak spot: git is the transport for the bytes, so the trust is in the hash you typed and in the pasted code, which you read.
 3. `export.py` runs `git fsck --no-dangling`, then walks from the typed commit, re-reads every commit, tree and file it uses, recomputes each hash itself and refuses on any difference. It writes `adk/` and `install.sh` from those verified bytes to `~/.config/adk/install-<hash>/src`. It does not use `git archive`, `.gitattributes` or `.git/info/attributes`.
 4. It runs `install.sh` from `src`. `install.sh` refuses to run from any other place, including the repo.
 
 Both checks rest on SHA-1: a forged file with the same SHA-1 as a reviewed one would pass. Making one needs a SHA-1 collision with a chosen target, which a file write alone does not give. That risk is not closed here.
 
+Git still reads the repository's own `.git/config`. The flags above switch off the keys that are known to run a program (pager, fsmonitor, hooks), and the system and global config are not read, but nothing here proves that no other key in `.git/config` can run code. Check that file by eye if you doubt the repository. The `git` program on `PATH` is trusted too.
+
 The one-liner uses `~/.config/adk`, never a temp folder, because a temp folder is a place Claude can write when you run a command with `!` inside a session. Run the install from a plain terminal anyway.
 
 The installer will:
 
 1. Refuse to run from anywhere but `~/.config/adk/install-<hash>/src`, and check that this folder is exactly the export of the commit.
-2. Refuse if the repository has any `refs/replace` entry (`git replace`), a `commondir`, `info/grafts` or `shallow` file, an `objects/info/alternates` file that is not empty (the sandbox leaves an empty one in the repo, which does nothing), or if `git fsck --no-dangling` says anything. These make git show other file contents under the same hash, or read objects from another folder.
+2. Refuse, before it runs any git command, if the repository's `.git` is not a plain folder, or holds a `commondir`, `info/grafts` or `shallow` file, an `objects/info/alternates` that is not an empty file (the sandbox leaves an empty one in the repo, which does nothing), or any `refs/replace` entry (`git replace`). Then run every git call with `--no-pager`, `core.pager=cat`, `core.fsmonitor=false`, `core.hooksPath=/dev/null` and no system or global git config, and refuse if `git fsck --no-dangling` says anything. `commondir` makes git read its config and hooks from a folder Claude can write; the others make git show other file contents under the same hash, or read objects from another folder.
 3. Use one fixed repository, `$ADK_REPO` if set, else `~/projects/agentic-dev-kit`, the same one the one-liner reads. It never uses the repository of the folder you are standing in. It refuses if that path is not a git repository, or if the hash is not a commit in it.
-4. Print the full hash and the commit subject, and ask `Install commit <hash> (<subject>)? [y/N]`. Only `y` continues. Nothing from the commit has run yet.
+4. Print the full hash and the commit subject, and ask `Install commit <hash> (<subject>)? [y/N]`. Only `y` continues. The hash you typed is the approval, not this prompt: the commit's `export.py` and `install.sh` have already run to get here, as you, and the prompt only catches a typo.
 5. Export that commit's `adk/` and `install.sh` into `~/.config/adk/src`, a folder Claude cannot reach, the same verified way. It refuses if the exported files are not exactly the commit's files with the commit's contents, or if the folder is not owned by you or is writable by anyone else.
 6. Show the plan and ask `Apply the plan above? [y/N]`. The plan, the user step, the root step and `adk doctor` all run from the exported copy. Before each root step the copy is checked again.
 7. Ask for your sudo password. The root part copies files into `/etc` and reloads AppArmor.

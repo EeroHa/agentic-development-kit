@@ -1,5 +1,9 @@
 # bootstrap.py: the first verified read of the installer one-liner. Standard library only.
 # Run as: /usr/bin/python3 -I -B -E -s bootstrap.py <repo> <dest> <40-hex-commit>
+# Before any git command it refuses a .git that is not a plain folder, or that holds commondir,
+# info/grafts, shallow, a non-empty alternates file or refs/replace entries: git would run config
+# or hooks, or read objects, from a place Claude Code controls. Git then runs with no system or
+# global config, no pager, no fsmonitor and no hooks.
 # It reads the commit, its tree, the adk and adk/install trees and the blob adk/install/export.py
 # through ONE `git cat-file --batch` process, each object once. It recomputes every object id as
 # sha1("<type> <len>" + NUL + data) and refuses on any difference. Only then does it write
@@ -21,14 +25,36 @@ def tree_entries(data):
         i = nul + 21
     return out
 
+def refuse_redirects(git_dir):
+    if os.path.islink(git_dir) or not os.path.isdir(git_dir):
+        refuse(git_dir + " is not a plain folder")
+    for rel in ("commondir", "info/grafts", "shallow"):
+        if os.path.lexists(os.path.join(git_dir, rel)):
+            refuse(rel + " exists in " + git_dir)
+    alt = os.path.join(git_dir, "objects", "info", "alternates")
+    if os.path.lexists(alt) and (os.path.islink(alt) or not os.path.isfile(alt) or os.path.getsize(alt) != 0):
+        refuse(alt + " is not an empty file")
+    replace = os.path.join(git_dir, "refs", "replace")
+    if os.path.lexists(replace) and (os.path.islink(replace) or not os.path.isdir(replace) or os.listdir(replace)):
+        refuse(replace + " has entries")
+    try:
+        with open(os.path.join(git_dir, "packed-refs"), "rb") as f:
+            if b"refs/replace/" in f.read():
+                refuse("packed-refs has refs/replace entries")
+    except FileNotFoundError:
+        pass
+
 def main(repo, dest, commit):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         refuse("the commit must be 40 lowercase hex characters")
     git_dir = os.path.join(repo, ".git")
+    refuse_redirects(git_dir)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1")
+    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
+               GIT_NO_LAZY_FETCH="1")
+    cmd = ["git", "--no-pager", "-c", "core.pager=cat", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
     try:
-        session = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE,
+        session = subprocess.Popen(cmd + ["cat-file", "--batch"], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd=repo)
     except OSError as err:
         refuse("cannot start git: %s" % err)

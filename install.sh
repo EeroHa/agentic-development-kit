@@ -17,6 +17,10 @@ H=<hash>; R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}; D=$HOME/.config/adk/ins
 /usr/bin/python3 -I -B -E -s - "$R" "$D" "$H" <<"PY" && "$D/src/install.sh" "$H"
 # bootstrap.py: the first verified read of the installer one-liner. Standard library only.
 # Run as: /usr/bin/python3 -I -B -E -s bootstrap.py <repo> <dest> <40-hex-commit>
+# Before any git command it refuses a .git that is not a plain folder, or that holds commondir,
+# info/grafts, shallow, a non-empty alternates file or refs/replace entries: git would run config
+# or hooks, or read objects, from a place Claude Code controls. Git then runs with no system or
+# global config, no pager, no fsmonitor and no hooks.
 # It reads the commit, its tree, the adk and adk/install trees and the blob adk/install/export.py
 # through ONE `git cat-file --batch` process, each object once. It recomputes every object id as
 # sha1("<type> <len>" + NUL + data) and refuses on any difference. Only then does it write
@@ -38,14 +42,36 @@ def tree_entries(data):
         i = nul + 21
     return out
 
+def refuse_redirects(git_dir):
+    if os.path.islink(git_dir) or not os.path.isdir(git_dir):
+        refuse(git_dir + " is not a plain folder")
+    for rel in ("commondir", "info/grafts", "shallow"):
+        if os.path.lexists(os.path.join(git_dir, rel)):
+            refuse(rel + " exists in " + git_dir)
+    alt = os.path.join(git_dir, "objects", "info", "alternates")
+    if os.path.lexists(alt) and (os.path.islink(alt) or not os.path.isfile(alt) or os.path.getsize(alt) != 0):
+        refuse(alt + " is not an empty file")
+    replace = os.path.join(git_dir, "refs", "replace")
+    if os.path.lexists(replace) and (os.path.islink(replace) or not os.path.isdir(replace) or os.listdir(replace)):
+        refuse(replace + " has entries")
+    try:
+        with open(os.path.join(git_dir, "packed-refs"), "rb") as f:
+            if b"refs/replace/" in f.read():
+                refuse("packed-refs has refs/replace entries")
+    except FileNotFoundError:
+        pass
+
 def main(repo, dest, commit):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         refuse("the commit must be 40 lowercase hex characters")
     git_dir = os.path.join(repo, ".git")
+    refuse_redirects(git_dir)
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1")
+    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
+               GIT_NO_LAZY_FETCH="1")
+    cmd = ["git", "--no-pager", "-c", "core.pager=cat", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
     try:
-        session = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE,
+        session = subprocess.Popen(cmd + ["cat-file", "--batch"], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd=repo)
     except OSError as err:
         refuse("cannot start git: %s" % err)
@@ -99,6 +125,7 @@ set -euo pipefail
 # A refs/replace entry makes git serve other bytes under the same hash. Never honour one.
 for v in $(compgen -e | grep '^GIT_' || true); do unset "$v"; done  # no GIT_DIR, GIT_OBJECT_DIRECTORY, ...
 export GIT_NO_REPLACE_OBJECTS=1
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_NO_LAZY_FETCH=1  # no system or global git config
 export PYTHONDONTWRITEBYTECODE=1
 
 usage() { echo "$USAGE" >&2; exit 2; }
@@ -129,32 +156,46 @@ EXPORT="$HERE/adk/install/export.py"
 # 3. One fixed repository, the one the documented one-liner reads from: $ADK_REPO, else
 #    ~/projects/agentic-dev-kit. Never the repository of the current folder.
 REPO=${ADK_REPO:-$HOME/projects/agentic-dev-kit}
-[ -d "$REPO" ] && [ "$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)" = "$(cd "$REPO" && pwd -P)" ] ||
-  die "refusing: $REPO is not a git repository (set ADK_REPO, or clone the kit to ~/projects/agentic-dev-kit)"
-[ "$(git -C "$REPO" cat-file -t "$hash" 2>/dev/null || true)" = commit ] ||
-  die "$hash is not a commit in the repository $REPO"
+GITDIR="$REPO/.git"
+[ -d "$GITDIR" ] && [ ! -L "$GITDIR" ] ||
+  die "refusing: $REPO is not a git repository (.git must be a plain folder; set ADK_REPO, or clone the kit to ~/projects/agentic-dev-kit)"
 
-# 4. Refuse a repository with replace refs, before anything is read from it (export.py checks again).
-for gitdir in "$(git -C "$REPO" rev-parse --git-dir)" "$(git -C "$REPO" rev-parse --git-common-dir)"; do
-  [[ $gitdir = /* ]] || gitdir="$REPO/$gitdir"
-  if [ -n "$(ls -A "$gitdir/refs/replace" 2>/dev/null || true)" ] || grep -qs 'refs/replace/' "$gitdir/packed-refs"; then
-    die "refusing: $gitdir has refs/replace entries, which can swap files without changing the hash"
-  fi
+# 4. Refuse a repository that makes git read config, hooks, objects or history from elsewhere. These are
+#    plain file checks and they come before the first git command: git runs the config it finds.
+#    (export.py checks again.)
+for f in commondir info/grafts shallow; do
+  [ -z "$(ls -d "$GITDIR/$f" 2>/dev/null)" ] || die "refusing: $GITDIR/$f exists (it makes git read config, objects or history from elsewhere)"
 done
-[ -z "$(git -C "$REPO" for-each-ref refs/replace)" ] || die "refusing: git for-each-ref refs/replace lists entries"
+ALT="$GITDIR/objects/info/alternates"
+if [ -e "$ALT" ] || [ -L "$ALT" ]; then
+  { [ -f "$ALT" ] && [ ! -L "$ALT" ] && [ ! -s "$ALT" ]; } || die "refusing: $ALT is not an empty file (it makes git read objects from elsewhere)"
+fi
+REPLACE="$GITDIR/refs/replace"
+if [ -e "$REPLACE" ] || [ -L "$REPLACE" ]; then
+  { [ -d "$REPLACE" ] && [ ! -L "$REPLACE" ] && [ -z "$(ls -A "$REPLACE")" ]; } ||
+    die "refusing: $REPLACE has entries (refs/replace can swap files without changing the hash)"
+fi
+! grep -qs 'refs/replace/' "$GITDIR/packed-refs" || die "refusing: $GITDIR/packed-refs has refs/replace entries"
+
+# Every git call: the pinned git dir, no pager, no fsmonitor, no hooks (and no system or global config, set above).
+gitq() { git --git-dir="$GITDIR" --no-pager -c core.pager=cat -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+[ -z "$(gitq for-each-ref refs/replace)" ] || die "refusing: git for-each-ref refs/replace lists entries"
+[ "$(gitq cat-file -t "$hash" 2>/dev/null || true)" = commit ] ||
+  die "$hash is not a commit in the repository $REPO"
 
 # 5. Tripwire: this script and export.py must equal the approved commit's copies.
 #    This is a tripwire, not a guarantee. A copy that was edited can simply skip this check, so
 #    the only safe way is the documented one: run the copy that export.py wrote under
 #    ~/.config/adk (see the usage text). If the check cannot run, refuse.
 for f in install.sh adk/install/export.py; do
-  cmp -s <(git -C "$REPO" cat-file blob "$hash:$f" 2>/dev/null) "$HERE/$f" ||
+  cmp -s <(gitq cat-file blob "$hash:$f" 2>/dev/null) "$HERE/$f" ||
     die "refusing: $HERE/$f is not the copy in commit $hash. Run the exported copy: run install.sh without arguments for the commands"
 done
 $PY -I "$EXPORT" verify "$REPO" "$HERE" "$hash" ||
   die "refusing: $HERE is not exactly the export of commit $hash"
 
-# 6. Show the commit and ask. Nothing from the commit has run yet.
+# 6. Show the commit and ask. The hash you typed is the approval: the commit's bootstrap, export.py and this
+#    script already ran to get here. The prompt below only catches a typo.
 subject=$($PY -I "$EXPORT" info "$REPO" "$hash")
 verb=Install
 [ "$action" = install ] || verb=Uninstall

@@ -14,10 +14,13 @@ typed commit, re-reads the raw bytes of every commit, tree and blob in the expor
 `git cat-file <type> <id>`, recomputes sha1(b"<type> <len>\\0" + bytes) in Python and
 refuses on any difference. The files are written from those verified bytes. `git archive`
 is not used (it applies attributes and filters). `git fsck --no-dangling` must be silent.
-Every git call runs with GIT_NO_REPLACE_OBJECTS=1, GIT_DIR pinned to the repository's own
-git dir, and all other GIT_* variables removed. A repository that redirects its objects or
-history (commondir, alternates, grafts, shallow, replace refs) is refused. .git/info/attributes
-and .gitattributes are never read, because the export uses no filter.
+Every git call runs with GIT_NO_REPLACE_OBJECTS=1, GIT_DIR pinned to <repo>/.git, no system or
+global git config (GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null), no pager, no fsmonitor,
+no hooks, and all other GIT_* variables removed. Before the first git call, a repository whose
+.git is not a plain folder, or that redirects its config, objects or history (commondir,
+alternates that are not an empty file, grafts, shallow, replace refs) is refused: those files
+make git run config or hooks from a folder Claude Code controls, or serve other bytes.
+.git/info/attributes and .gitattributes are never read, because the export uses no filter.
 
 Limit: the check is only as strong as SHA-1. Someone who can produce a SHA-1 collision with
 a reviewed object could still swap it. That is out of reach of a file write, and not closed here.
@@ -35,39 +38,71 @@ HASH_RE = re.compile(r"[0-9a-f]{40}")
 REQUIRED = ("adk/__init__.py", "adk/wall/policy.json")
 # Files whose existence makes git read objects, history or config from somewhere else.
 REFUSED_FILES = ("commondir", "info/grafts", "shallow")
-# The same, unless the file is empty. The Claude Code sandbox leaves an empty placeholder
+# The same, unless the file has size 0. The Claude Code sandbox leaves an empty placeholder
 # (an empty objects/info/alternates exists in the kit's own repo), and git reads no redirect
-# from an empty alternates file. An empty commondir is not harmless: it breaks git.
+# from a zero-byte alternates file. A file of only whitespace is not empty: git reads it as a path.
 REFUSED_UNLESS_EMPTY = ("objects/info/alternates",)
 FILE_MODES = {"100644": False, "100755": True}
 TREE_MODE = "40000"
 
 
+# Every git call starts like this and runs with _env(): nothing from system or global config, no pager.
+GIT = ("git", "--no-pager", "-c", "core.pager=cat", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
+
+
 def _env(gitdir=None) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    env.update(GIT_NO_REPLACE_OBJECTS="1", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
+               GIT_NO_LAZY_FETCH="1")
     if gitdir is not None:
         env["GIT_DIR"] = gitdir
     return env
 
 
-class Repo:
-    """A repository, addressed only by its pinned git dir."""
+def _is_empty_file(path: str) -> bool:
+    """An empty regular file. Anything else, even only whitespace, is a redirect: git reads it as an alternate path."""
+    st = os.lstat(path)
+    return stat.S_ISREG(st.st_mode) and st.st_size == 0
 
-    def __init__(self, path):
+
+def refuse_redirects(gitdir: str) -> None:
+    """Refuse a .git that makes git read config, hooks, objects or history from anywhere but its own folder.
+
+    Pure file checks: this runs before the first git command, because git runs the config it finds.
+    """
+    if os.path.islink(gitdir) or not os.path.isdir(gitdir):
+        raise ValueError(f"refusing: {gitdir} is not a plain folder (a gitfile or symlink sends git elsewhere)")
+    for rel in REFUSED_FILES:
+        if os.path.lexists(os.path.join(gitdir, rel)):
+            raise ValueError(f"refusing: {os.path.join(gitdir, rel)} exists (it makes git read from elsewhere)")
+    for rel in REFUSED_UNLESS_EMPTY:
+        path = os.path.join(gitdir, rel)
+        if os.path.lexists(path) and not _is_empty_file(path):
+            raise ValueError(f"refusing: {path} is not an empty file (it makes git read from elsewhere)")
+    loose = os.path.join(gitdir, "refs", "replace")
+    if os.path.lexists(loose) and (os.path.islink(loose) or not os.path.isdir(loose) or os.listdir(loose)):
+        raise ValueError(f"refusing: {loose} is not empty (git replace refs can swap the files)")
+    try:
+        with open(os.path.join(gitdir, "packed-refs"), "rb") as f:
+            if b"refs/replace/" in f.read():
+                raise ValueError("refusing: packed-refs contains refs/replace/ entries")
+    except FileNotFoundError:
+        pass
+
+
+class Repo:
+    """A repository, addressed only by its pinned git dir <path>/.git (never found by walking up)."""
+
+    def __init__(self, path, check=True):
         path = os.fspath(path)
         if not os.path.isdir(path):
             raise ValueError(f"not a folder: {path}")
-        done = subprocess.run(
-            ["git", "-C", path, "rev-parse", "--path-format=absolute", "--absolute-git-dir", "--git-common-dir"],
-            capture_output=True, env=_env())
-        lines = done.stdout.decode(errors="replace").split("\n")
-        if done.returncode != 0 or len(lines) < 2:
-            raise ValueError(f"{path} is not a git repository")
-        self.gitdir, self.common = lines[0], lines[1]
+        self.gitdir = os.path.join(os.path.realpath(path), ".git")
+        if check:
+            refuse_redirects(self.gitdir)
 
     def git(self, *args) -> bytes:
-        done = subprocess.run(["git", *args], capture_output=True, env=_env(self.gitdir), cwd=self.gitdir)
+        done = subprocess.run([*GIT, *args], capture_output=True, env=_env(self.gitdir), cwd=self.gitdir)
         if done.returncode != 0:
             raise subprocess.CalledProcessError(done.returncode, ["git", *args], done.stdout, done.stderr)
         return done.stdout
@@ -77,35 +112,9 @@ def _open(repo) -> Repo:
     return repo if isinstance(repo, Repo) else Repo(repo)
 
 
-def _is_empty_file(path: str) -> bool:
-    st = os.lstat(path)
-    if not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
-        return False
-    with open(path, "rb") as f:
-        return not f.read().strip()
-
-
 def refuse_unsafe_repo(repo) -> None:
     """Refuse a repository that makes git serve objects, history or config from anywhere but its own folder."""
-    repo = _open(repo)
-    if os.path.realpath(repo.common) != os.path.realpath(repo.gitdir):
-        raise ValueError(f"refusing: the common git dir {repo.common} differs from the git dir {repo.gitdir}")
-    for rel in REFUSED_FILES:
-        if os.path.lexists(os.path.join(repo.gitdir, rel)):
-            raise ValueError(f"refusing: {os.path.join(repo.gitdir, rel)} exists (it makes git read from elsewhere)")
-    for rel in REFUSED_UNLESS_EMPTY:
-        path = os.path.join(repo.gitdir, rel)
-        if os.path.lexists(path) and not _is_empty_file(path):
-            raise ValueError(f"refusing: {path} is not empty (it makes git read from elsewhere)")
-    loose = os.path.join(repo.gitdir, "refs", "replace")
-    if os.path.lexists(loose) and (not os.path.isdir(loose) or os.listdir(loose)):
-        raise ValueError(f"refusing: {loose} is not empty (git replace refs can swap the files)")
-    try:
-        with open(os.path.join(repo.gitdir, "packed-refs"), "rb") as f:
-            if b"refs/replace/" in f.read():
-                raise ValueError("refusing: packed-refs contains refs/replace/ entries")
-    except FileNotFoundError:
-        pass
+    repo = _open(repo)  # the file checks, before any git command
     if repo.git("for-each-ref", "refs/replace").strip():
         raise ValueError("refusing: git for-each-ref refs/replace lists entries")
 
@@ -113,7 +122,7 @@ def refuse_unsafe_repo(repo) -> None:
 def run_fsck(repo) -> None:
     """git fsck --no-dangling must say nothing: it is the one check that covers every object, not only the export set."""
     repo = _open(repo)
-    done = subprocess.run(["git", "fsck", "--no-dangling", "--no-progress"], capture_output=True,
+    done = subprocess.run([*GIT, "fsck", "--no-dangling", "--no-progress"], capture_output=True,
                           env=_env(repo.gitdir), cwd=repo.gitdir)
     said = (done.stdout + done.stderr).decode(errors="replace").strip()
     if done.returncode != 0 or said:

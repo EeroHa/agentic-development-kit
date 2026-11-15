@@ -7,6 +7,8 @@ import unittest
 import zlib
 from pathlib import Path
 
+from tests import gitspy
+
 REPO = Path(__file__).resolve().parent.parent
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
@@ -60,8 +62,8 @@ class InstallScriptTest(unittest.TestCase):
                 os.chmod(path, 0o755 if os.stat(path).st_mode & 0o100 else 0o644)
         return dest
 
-    def run_script(self, script, *args, stdin="", cwd=None, adk_repo=None):
-        env = {**os.environ, "HOME": str(self.home), "PATH": os.environ["PATH"]}
+    def run_script(self, script, *args, stdin="", cwd=None, adk_repo=None, path=None):
+        env = {**os.environ, "HOME": str(self.home), "PATH": path or os.environ["PATH"]}
         env.pop("GIT_NO_REPLACE_OBJECTS", None)
         env.pop("ADK_REPO", None)
         if adk_repo != "unset":
@@ -292,6 +294,115 @@ class InstallScriptTest(unittest.TestCase):
         self.assertNotIn("TMPDIR", text)
         self.assertNotIn("archive", text)
         self.assertIn("-B -E -s -m adk", text)  # -E ignores PYTHONDONTWRITEBYTECODE, so -B keeps the export free of .pyc files
+
+    def spy(self):
+        log = self.tmp / "git.log"
+        return gitspy.install(self.tmp / "spy", log), log
+
+    def test_a_redirected_config_is_refused_by_install_sh_before_any_git_command(self):
+        script = self.extract() / "install.sh"
+        path, log = self.spy()
+        marker = self.tmp / "PWNED"
+        gitspy.make_redirect_config(self.repo, marker)
+        done = self.run_script(script, self.hash, stdin="y\n", path=path)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("commondir", done.stderr)
+        self.assertNotIn("Subject", done.stdout)
+        self.assertEqual(gitspy.calls(log), [])
+        self.assertFalse(marker.exists())
+        self.assert_nothing_installed()
+
+    def test_install_sh_refuses_each_other_redirect_before_any_git_command(self):
+        script = self.extract() / "install.sh"
+        path, log = self.spy()
+        git = self.repo / ".git"
+        (git / "objects" / "info").mkdir(parents=True, exist_ok=True)
+        alt = git / "objects" / "info" / "alternates"
+        (self.tmp / "empty").write_text("")
+        for what, make, undo in (
+                ("grafts", lambda: (git / "info").mkdir(exist_ok=True) or (git / "info" / "grafts").write_text(""),
+                 lambda: (git / "info" / "grafts").unlink()),
+                ("shallow", lambda: (git / "shallow").write_text(""), lambda: (git / "shallow").unlink()),
+                ("alternates", lambda: alt.write_text("/elsewhere\n"), alt.unlink),
+                ("whitespace", lambda: alt.write_text("  \n"), alt.unlink),
+                ("symlink", lambda: alt.symlink_to(self.tmp / "empty"), alt.unlink),
+                ("replace", lambda: (git / "refs" / "replace").mkdir(parents=True, exist_ok=True) or
+                 (git / "refs" / "replace" / ("a" * 40)).write_text("b" * 40 + "\n"),
+                 lambda: (git / "refs" / "replace" / ("a" * 40)).unlink()),
+                ("packed", lambda: (git / "packed-refs").write_text("%s refs/replace/%s\n" % ("b" * 40, "a" * 40)),
+                 lambda: (git / "packed-refs").unlink()),
+                ("gitfile", lambda: (git.rename(self.tmp / "moved"), git.write_text("gitdir: ../moved\n")),
+                 lambda: (git.unlink(), (self.tmp / "moved").rename(git)))):
+            with self.subTest(what=what):
+                make()
+                done = self.run_script(script, self.hash, stdin="y\n", path=path)
+                self.assertEqual(done.returncode, 1, done.stderr)
+                self.assertIn("refusing", done.stderr)
+                self.assertNotIn("Subject", done.stdout)
+                self.assertEqual(gitspy.calls(log), [])
+                undo()
+        alt.write_text("")  # the sandbox placeholder is fine
+        done = self.run_script(script, self.hash, stdin="n\n", path=path)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_every_git_call_of_install_sh_and_its_export_is_hardened(self):
+        script = self.extract() / "install.sh"
+        path, log = self.spy()
+        done = self.run_script(script, self.hash, stdin="n\n", path=path)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        calls = gitspy.calls(log)
+        self.assertGreater(len(calls), 3)
+        for line in calls:
+            with self.subTest(line=line):
+                self.assertRegex(line, r"^(--git-dir=\S+ )?--no-pager -c core.pager=cat -c core.fsmonitor=false -c core.hooksPath=/dev/null ")
+                self.assertTrue(line.endswith("|nosystem=1|global=/dev/null"), line)
+
+    def test_the_documented_one_liner_refuses_a_commondir_before_any_git_command(self):
+        path, log = self.spy()
+        marker = self.tmp / "PWNED"
+        gitspy.make_redirect_config(self.repo, marker)
+        env = {"HOME": str(self.home), "ADK_REPO": str(self.repo), "PATH": path}
+        for word in ("install", "uninstall"):
+            with self.subTest(word=word):
+                done = subprocess.run(["bash", "-c", self.documented_lines(word)], input="y\n", capture_output=True,
+                                      text=True, env=env, cwd=self.work, timeout=120)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("commondir", done.stderr)
+                self.assertEqual(gitspy.calls(log), [])
+                self.assertFalse(marker.exists())
+                self.assertFalse((self.home / ".config").exists())
+
+    def guide_log_line(self):
+        text = (REPO / "docs" / "operating-the-wall.md").read_text()
+        block = [b.strip("\n") for b in text.split("```")[1::2] if "log -1 --format=%H" in b][0]
+        self.assertEqual(len(block.splitlines()), 2)
+        self.assertIn("git --git-dir=", block)
+        self.assertIn("--no-pager -c core.pager=cat", block)
+        self.assertLess(block.index("commondir"), block.index("git --git-dir="))
+        return block.replace("<branch>", "main")
+
+    def test_the_guides_git_log_line_checks_commondir_first_and_runs_git_hardened(self):
+        path, log = self.spy()
+        env = {"HOME": str(self.home), "ADK_REPO": str(self.repo), "PATH": path}
+        run = lambda: subprocess.run(["bash", "-c", self.guide_log_line()], capture_output=True, text=True, env=env,
+                                     cwd=self.work, timeout=60)
+        done = run()
+        self.assertEqual(done.stdout.strip(), self.hash, done.stderr)
+        for line in gitspy.calls(log):
+            self.assertRegex(line, r"^--git-dir=\S+ --no-pager -c core.pager=cat -c core.fsmonitor=false -c core.hooksPath=/dev/null .*\|nosystem=1\|global=/dev/null$")
+        log.unlink()
+        marker = self.tmp / "PWNED"
+        gitspy.make_redirect_config(self.repo, marker)
+        done = run()
+        self.assertEqual(done.stdout, "")
+        self.assertEqual(gitspy.calls(log), [])
+        self.assertFalse(marker.exists())
+
+    def test_the_docs_and_install_sh_do_not_say_that_nothing_from_the_commit_has_run(self):
+        for text in ((REPO / "docs" / "operating-the-wall.md").read_text(), (REPO / "install.sh").read_text()):
+            self.assertNotIn("Nothing from the commit has run yet", text)
+            self.assertIn("typed hash", text.replace("hash you typed", "typed hash"))
+            self.assertIn("typo", text)
 
 
 if __name__ == "__main__":

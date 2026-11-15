@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from adk.install import export
+from tests import gitspy
 
 REPO = Path(__file__).resolve().parent.parent
 GIT_ENV = {
@@ -145,7 +146,7 @@ class ExportTest(unittest.TestCase):
     def test_git_runs_with_replace_objects_off(self):
         blob = self.git("rev-parse", "HEAD:adk/a.py")
         self.git("replace", blob, self.git("rev-parse", "HEAD:adk/__init__.py"))
-        out = export.Repo(self.repo).git("cat-file", "-p", blob).decode()
+        out = export.Repo(self.repo, check=False).git("cat-file", "-p", blob).decode()
         self.assertEqual(out, "a = 1\n")
 
     def test_export_ignores_gitattributes_export_ignore_and_export_subst(self):
@@ -266,12 +267,60 @@ class ExportTest(unittest.TestCase):
         head = self.head()
         (self.tmp / "empty").write_text("")
         path.symlink_to(self.tmp / "empty")
-        with self.assertRaisesRegex(ValueError, "not empty"):
+        with self.assertRaisesRegex(ValueError, "not an empty file"):
             export.export_commit(self.repo, self.dest, head)
         path.unlink()
-        path.write_text("../../other/objects\n")
-        with self.assertRaisesRegex(ValueError, "not empty"):
+        for text in ("../../other/objects\n", "   \n", "\n", " "):  # git reads whitespace as a relative path
+            with self.subTest(text=text):
+                path.write_text(text)
+                with self.assertRaisesRegex(ValueError, "not an empty file"):
+                    export.export_commit(self.repo, self.dest, head)
+
+    def spy(self):
+        log = self.tmp / "git.log"
+        return gitspy.install(self.tmp / "spy", log), log
+
+    def test_a_redirected_config_is_refused_before_any_git_command_runs(self):
+        marker = self.tmp / "PWNED"
+        path, log = self.spy()
+        head = self.head()
+        gitspy.make_redirect_config(self.repo, marker)
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            for call in (lambda: export.check_commit(self.repo, head), lambda: export.export_commit(self.repo, self.dest, head),
+                         lambda: export.verify_export(self.repo, self.dest, head), lambda: export.Repo(self.repo)):
+                with self.assertRaisesRegex(ValueError, "commondir"):
+                    call()
+        self.assertEqual(gitspy.calls(log), [])
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.dest.exists())
+
+    def test_the_same_repository_without_commondir_works_and_every_git_call_is_hardened(self):
+        path, log = self.spy()
+        head = self.head()
+        with mock.patch.dict(os.environ, {"PATH": path}):
             export.export_commit(self.repo, self.dest, head)
+            export.verify_export(self.repo, self.dest, head)
+        calls = gitspy.calls(log)
+        self.assertGreater(len(calls), 3)
+        for line in calls:
+            with self.subTest(line=line):
+                self.assertTrue(line.startswith("--no-pager -c core.pager=cat -c core.fsmonitor=false -c core.hooksPath=/dev/null "), line)
+                self.assertTrue(line.endswith("|nosystem=1|global=/dev/null"), line)
+
+    def test_a_gitfile_or_symlinked_dot_git_is_refused_before_any_git_command(self):
+        path, log = self.spy()
+        moved = self.tmp / "moved-git"
+        (self.repo / ".git").rename(moved)
+        with mock.patch.dict(os.environ, {"PATH": path}):
+            for make in (lambda: (self.repo / ".git").write_text(f"gitdir: {moved}\n"),
+                         lambda: (self.repo / ".git").symlink_to(moved)):
+                make()
+                with self.assertRaisesRegex(ValueError, "plain folder"):
+                    export.export_commit(self.repo, self.dest, "a" * 40)
+                (self.repo / ".git").unlink()
+            with self.assertRaisesRegex(ValueError, "plain folder"):
+                export.export_commit(self.repo, self.dest, "a" * 40)  # no .git at all: git must not walk up
+        self.assertEqual(gitspy.calls(log), [])
 
     def test_the_refusal_names_the_file(self):
         (self.repo / ".git" / "info").mkdir(exist_ok=True)
@@ -282,7 +331,7 @@ class ExportTest(unittest.TestCase):
     def test_export_refuses_when_the_common_dir_differs_from_the_git_dir(self):
         wt = self.tmp / "linked"
         self.git("worktree", "add", "-q", "-b", "other", str(wt))
-        with self.assertRaisesRegex(ValueError, "common"):
+        with self.assertRaisesRegex(ValueError, "plain folder"):  # .git is a gitfile there: git would follow it
             export.check_commit(wt, self.head())
 
     def test_git_environment_variables_do_not_redirect_the_export(self):

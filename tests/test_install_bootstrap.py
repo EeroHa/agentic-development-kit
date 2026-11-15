@@ -8,6 +8,8 @@ import unittest
 import zlib
 from pathlib import Path
 
+from tests import gitspy
+
 REPO = Path(__file__).resolve().parent.parent
 BOOTSTRAP = REPO / "adk" / "install" / "bootstrap.py"
 GIT_ENV = {
@@ -153,6 +155,66 @@ class BootstrapTest(unittest.TestCase):
         for line in (first, second):
             self.assertNotIn("git ", line.replace("agentic-dev-kit", ""))
         self.assertTrue(second.startswith("/usr/bin/python3 -I -B -E -s - "))
+
+    def make_redirect(self, what):
+        git = self.repo / ".git"
+        marker = self.tmp / "PWNED"
+        if what == "commondir":
+            gitspy.make_redirect_config(self.repo, marker)
+        elif what == "grafts":
+            (git / "info").mkdir(exist_ok=True)
+            (git / "info" / "grafts").write_text("")
+        elif what == "shallow":
+            (git / "shallow").write_text("")
+        elif what in ("alternates", "alternates-whitespace", "alternates-symlink"):
+            alt = git / "objects" / "info" / "alternates"
+            alt.parent.mkdir(parents=True, exist_ok=True)
+            (self.tmp / "empty").write_text("")
+            if what == "alternates-symlink":
+                alt.symlink_to(self.tmp / "empty")
+            else:
+                alt.write_text("   \n" if what == "alternates-whitespace" else "/elsewhere/objects\n")
+        elif what == "replace":
+            blob = self.git("rev-parse", f"{self.hash}:adk/__init__.py")
+            self.git("replace", "-f", blob, self.git("rev-parse", f"{self.hash}:install.sh"))
+        elif what == "packed-replace":
+            blob = self.git("rev-parse", f"{self.hash}:adk/__init__.py")
+            self.git("replace", "-f", blob, self.git("rev-parse", f"{self.hash}:install.sh"))
+            self.git("pack-refs", "--all")
+            self.assertEqual(list((git / "refs" / "replace").iterdir()), [])
+        elif what == "gitfile":
+            (git).rename(self.tmp / "moved-git")
+            git.write_text(f"gitdir: {self.tmp / 'moved-git'}\n")
+        elif what == "symlink":
+            (git).rename(self.tmp / "moved-git")
+            git.symlink_to(self.tmp / "moved-git")
+        return marker
+
+    def test_every_redirect_is_refused_before_any_git_command_runs(self):
+        for what in ("commondir", "grafts", "shallow", "alternates", "alternates-whitespace", "alternates-symlink",
+                     "replace", "packed-replace", "gitfile", "symlink"):
+            with self.subTest(what=what):
+                self.setUp()
+                log = self.tmp / "git.log"
+                path = gitspy.install(self.tmp / "spy", log)
+                marker = self.make_redirect(what)
+                done = self.run_bootstrap(path=path)
+                self.assert_refused(done)
+                self.assertEqual(gitspy.calls(log), [], done.stderr)
+                self.assertFalse(marker.exists())
+
+    def test_without_commondir_the_same_repository_works_and_git_runs_hardened(self):
+        log = self.tmp / "git.log"
+        path = gitspy.install(self.tmp / "spy", log)
+        (self.repo / ".git" / "objects" / "info").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".git" / "objects" / "info" / "alternates").write_text("")  # the sandbox placeholder
+        done = self.run_bootstrap(path=path)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        calls = gitspy.calls(log)
+        self.assertGreater(len(calls), 3)  # the bootstrap's own session, then export.py's
+        for line in calls:
+            self.assertTrue(line.startswith("--no-pager -c core.pager=cat -c core.fsmonitor=false -c core.hooksPath=/dev/null "), line)
+            self.assertTrue(line.endswith("|nosystem=1|global=/dev/null"), line)
 
 
 if __name__ == "__main__":
