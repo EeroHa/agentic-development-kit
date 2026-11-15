@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
@@ -355,6 +356,68 @@ class ApplyRootRefusalTest(InstallTestBase):
                 continue
             for name in names:
                 self.assertNotEqual(name.split(".")[0], "adk", name)
+
+
+class ApplyRootSymlinkWalkTest(InstallTestBase):
+    """A symlink partway down a target path must never redirect a write or a delete (I3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.outside = self.tmp / "outside"
+        (self.outside / "cron.d").mkdir(parents=True)
+        (self.outside / "cron.d" / "evil").write_text("keep me\n")
+        self.lib = self.root / "usr/local/lib/agentic-dev-kit"
+        self.lib.mkdir(parents=True)
+        (self.lib / "x").symlink_to(self.outside)
+        self.target = "usr/local/lib/agentic-dev-kit/x/cron.d/evil"
+
+    def assert_outside_untouched(self):
+        self.assertEqual(sorted(str(p.relative_to(self.outside)) for p in self.outside.rglob("*")),
+                         ["cron.d", "cron.d/evil"])
+        self.assertEqual((self.outside / "cron.d" / "evil").read_text(), "keep me\n")
+
+    def test_apply_refuses_a_write_through_a_symlinked_parent_folder(self):
+        for payload_entry in (self.entry(self.target), self.entry(self.target, remove=True, payload=None)):
+            with self.subTest(remove=payload_entry["remove"]):
+                staging = self.manifest_staging(
+                    [self.entry("etc/claude-code/ok.json", "0001"), payload_entry], {"0000": b"x", "0001": b"{}"})
+                before = snapshot(self.root)
+                with self.assertRaises(OSError) as ctx:
+                    apply_root.apply(staging, self.p.root_backups_dir, self.root)
+                self.assertIn("symlink", str(ctx.exception))
+                self.assertEqual(snapshot(self.root), before)  # the earlier, harmless entry was not written either
+                self.assert_outside_untouched()
+                for f in staging.iterdir():
+                    f.unlink()
+                staging.rmdir()
+
+    def test_apply_refuses_a_symlink_higher_up_even_when_the_deeper_folders_exist(self):
+        (self.root / "etc/claude-code").symlink_to(self.outside)
+        staging = self.manifest_staging([self.entry("etc/claude-code/cron.d/evil")], {"0000": b"x"})
+        with self.assertRaises(OSError):
+            apply_root.apply(staging, self.p.root_backups_dir, self.root)
+        self.assert_outside_untouched()
+
+    def test_restore_refuses_to_delete_or_write_through_a_symlinked_parent_folder(self):
+        for kind in ("created", "links", "files"):
+            with self.subTest(kind=kind):
+                bdir = self.p.root_backups_dir / "20260101T000000000000Z"
+                (bdir / "files").mkdir(parents=True)
+                created, links = [], {}
+                if kind == "created":
+                    created = [self.target]
+                elif kind == "links":
+                    links = {self.target: str(self.lib / "bin" / "adk")}
+                else:
+                    (bdir / "files" / self.target).parent.mkdir(parents=True)
+                    (bdir / "files" / self.target).write_text("from backup\n")
+                (bdir / "created.json").write_text(json.dumps(created))
+                (bdir / "links.json").write_text(json.dumps(links))
+                with self.assertRaises(OSError):
+                    apply_root.restore(self.p.root_backups_dir, self.root)
+                self.assert_outside_untouched()
+                self.assertTrue(bdir.exists())  # nothing was restored, so the backup stays
+                shutil.rmtree(bdir)
 
 
 class ApplyUserTest(InstallTestBase):
