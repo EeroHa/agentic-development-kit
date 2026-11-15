@@ -252,6 +252,27 @@ class ExportTest(unittest.TestCase):
                 path.unlink()
         self.export()  # honest again
 
+    def test_an_empty_alternates_placeholder_is_harmless(self):
+        # the Claude Code sandbox leaves an empty one in the kit's own repository
+        path = self.repo / ".git" / "objects" / "info" / "alternates"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        self.export()
+        self.assertEqual((self.dest / "adk" / "a.py").read_text(), "a = 1\n")
+
+    def test_a_symlink_or_a_whitespace_filled_alternates_is_not_the_empty_placeholder(self):
+        path = self.repo / ".git" / "objects" / "info" / "alternates"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        head = self.head()
+        (self.tmp / "empty").write_text("")
+        path.symlink_to(self.tmp / "empty")
+        with self.assertRaisesRegex(ValueError, "not empty"):
+            export.export_commit(self.repo, self.dest, head)
+        path.unlink()
+        path.write_text("../../other/objects\n")
+        with self.assertRaisesRegex(ValueError, "not empty"):
+            export.export_commit(self.repo, self.dest, head)
+
     def test_the_refusal_names_the_file(self):
         (self.repo / ".git" / "info").mkdir(exist_ok=True)
         (self.repo / ".git" / "info" / "grafts").write_text("")

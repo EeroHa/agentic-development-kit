@@ -34,7 +34,11 @@ TRACKED = ("adk", "install.sh")
 HASH_RE = re.compile(r"[0-9a-f]{40}")
 REQUIRED = ("adk/__init__.py", "adk/wall/policy.json")
 # Files whose existence makes git read objects, history or config from somewhere else.
-REFUSED_FILES = ("commondir", "objects/info/alternates", "info/grafts", "shallow")
+REFUSED_FILES = ("commondir", "info/grafts", "shallow")
+# The same, unless the file is empty. The Claude Code sandbox leaves an empty placeholder
+# (an empty objects/info/alternates exists in the kit's own repo), and git reads no redirect
+# from an empty alternates file. An empty commondir is not harmless: it breaks git.
+REFUSED_UNLESS_EMPTY = ("objects/info/alternates",)
 FILE_MODES = {"100644": False, "100755": True}
 TREE_MODE = "40000"
 
@@ -73,6 +77,14 @@ def _open(repo) -> Repo:
     return repo if isinstance(repo, Repo) else Repo(repo)
 
 
+def _is_empty_file(path: str) -> bool:
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
+        return False
+    with open(path, "rb") as f:
+        return not f.read().strip()
+
+
 def refuse_unsafe_repo(repo) -> None:
     """Refuse a repository that makes git serve objects, history or config from anywhere but its own folder."""
     repo = _open(repo)
@@ -81,6 +93,10 @@ def refuse_unsafe_repo(repo) -> None:
     for rel in REFUSED_FILES:
         if os.path.lexists(os.path.join(repo.gitdir, rel)):
             raise ValueError(f"refusing: {os.path.join(repo.gitdir, rel)} exists (it makes git read from elsewhere)")
+    for rel in REFUSED_UNLESS_EMPTY:
+        path = os.path.join(repo.gitdir, rel)
+        if os.path.lexists(path) and not _is_empty_file(path):
+            raise ValueError(f"refusing: {path} is not empty (it makes git read from elsewhere)")
     loose = os.path.join(repo.gitdir, "refs", "replace")
     if os.path.lexists(loose) and (not os.path.isdir(loose) or os.listdir(loose)):
         raise ValueError(f"refusing: {loose} is not empty (git replace refs can swap the files)")
