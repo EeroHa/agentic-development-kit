@@ -67,6 +67,26 @@ class WallGenerateTest(unittest.TestCase):
         )
         self.assertEqual(got, ["A_Password", "b_token", "my_credentials"])
 
+    def test_credential_like_catches_url_shaped_and_auth_names(self):
+        names = ["DATABASE_URL", "SENTRY_DSN", "sentry_dsn_backend", "HTTP_AUTH", "AUTHORIZATION",
+                 "OAUTH_CLIENT", "REDIS_DATABASE_URL"]
+        self.assertEqual(credential_like(names, load_policy()), sorted(names))
+
+    def test_credential_like_still_ignores_ordinary_names(self):
+        names = ["PATH", "HOME", "SHELL", "LANG", "PWD", "TERM", "USER", "EDITOR", "DISPLAY",
+                 "XDG_RUNTIME_DIR", "DESKTOP_SESSION", "XDG_SESSION_TYPE", "COLORTERM"]
+        self.assertEqual(credential_like(names, load_policy()), [])
+
+    def test_new_url_shaped_names_from_the_environment_are_denied(self):
+        names = [e["name"] for e in build(["DATABASE_URL", "SENTRY_DSN", "HTTP_AUTH", "PATH"])
+                 ["sandbox"]["credentials"]["envVars"]]
+        for n in ("DATABASE_URL", "SENTRY_DSN", "HTTP_AUTH"):
+            self.assertIn(n, names)
+        self.assertNotIn("PATH", names)
+        # XAUTHORITY matches the AUTH pattern but is on the never-deny list.
+        out = build(["XAUTHORITY"])["sandbox"]["credentials"]["envVars"]
+        self.assertNotIn("XAUTHORITY", [e["name"] for e in out])
+
     def test_secret_file_patterns_emitted_for_both_sandbox_and_read_rules(self):
         policy = load_policy()
         out = build()

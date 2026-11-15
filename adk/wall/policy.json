@@ -29,7 +29,7 @@
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
     "OPENAI_API_KEY", "ADK_CANARY_TOKEN"
   ],
-  "env_name_patterns": ["KEY", "TOKEN", "SECRET", "PASSW", "CREDENTIAL"],
+  "env_name_patterns": ["KEY", "TOKEN", "SECRET", "PASSW", "CREDENTIAL", "AUTH", "DSN", "DATABASE_URL"],
   "env_never_deny": ["CLAUDE_CODE_MESSAGING_TOKEN", "XAUTHORITY"],
   "allowed_domains": [
     "registry.npmjs.org", "*.npmjs.org", "pypi.org", "files.pythonhosted.org",
