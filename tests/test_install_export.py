@@ -1,10 +1,12 @@
 import contextlib
+import hashlib
 import io
 import os
 import stat
 import subprocess
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -45,6 +47,26 @@ class ExportTest(unittest.TestCase):
 
     def head(self):
         return self.git("rev-parse", "HEAD")
+
+    def loose_path(self, oid):
+        return self.repo / ".git" / "objects" / oid[:2] / oid[2:]
+
+    def overwrite_loose(self, oid, kind, data):
+        """Replace the loose object file named oid by one holding other bytes: what Claude could do."""
+        path = self.loose_path(oid)
+        path.chmod(0o644)
+        path.write_bytes(zlib.compress(b"%s %d\0" % (kind.encode(), len(data)) + data))
+
+    def forged_tree(self, tree_oid, old_blob, new_blob):
+        raw = subprocess.run(["git", "-C", str(self.repo), "cat-file", "tree", tree_oid],
+                             capture_output=True, check=True).stdout
+        forged = raw.replace(bytes.fromhex(old_blob), bytes.fromhex(new_blob))
+        self.assertNotEqual(raw, forged)
+        return forged
+
+    def write_blob(self, text):
+        return subprocess.run(["git", "-C", str(self.repo), "hash-object", "-w", "--stdin"], input=text,
+                              capture_output=True, text=True, check=True).stdout.strip()
 
     def export(self):
         return export.export_commit(self.repo, self.dest, self.head())
@@ -123,34 +145,142 @@ class ExportTest(unittest.TestCase):
     def test_git_runs_with_replace_objects_off(self):
         blob = self.git("rev-parse", "HEAD:adk/a.py")
         self.git("replace", blob, self.git("rev-parse", "HEAD:adk/__init__.py"))
-        out = export._git(self.repo, "cat-file", "-p", blob).decode()
+        out = export.Repo(self.repo).git("cat-file", "-p", blob).decode()
         self.assertEqual(out, "a = 1\n")
 
-    def test_export_refuses_when_export_ignore_hides_a_file(self):
-        (self.repo / ".gitattributes").write_text("adk/a.py export-ignore\n")
-        self.commit("ignore a.py")
-        with self.assertRaisesRegex(ValueError, "missing"):
-            self.export()
-        self.assertFalse(self.dest.exists())
+    def test_export_ignores_gitattributes_export_ignore_and_export_subst(self):
+        (self.repo / ".gitattributes").write_text("adk/a.py export-ignore\ninstall.sh export-subst\n")
+        (self.repo / "install.sh").write_text("#!/bin/sh\n# $Format:%H$\n")
+        self.commit("attributes")
+        self.export()
+        self.assertEqual((self.dest / "adk" / "a.py").read_text(), "a = 1\n")
+        self.assertIn("$Format:%H$", (self.dest / "install.sh").read_text())
 
-    def test_export_refuses_export_ignore_set_in_info_attributes(self):
+    def test_info_attributes_is_not_read(self):
         (self.repo / ".git" / "info").mkdir(exist_ok=True)
-        (self.repo / ".git" / "info" / "attributes").write_text("install.sh export-ignore\n")
-        with self.assertRaisesRegex(ValueError, "missing|install.sh"):
-            self.export()
-
-    def test_export_refuses_export_subst_that_rewrites_a_file(self):
-        (self.repo / ".gitattributes").write_text("adk/a.py export-subst\n")
-        (self.repo / "adk" / "a.py").write_text("a = '$Format:%H$'\n")
-        self.commit("subst")
-        with self.assertRaisesRegex(ValueError, "changed"):
-            self.export()
+        (self.repo / ".git" / "info" / "attributes").write_text("install.sh export-ignore\n* filter=evil\n")
+        self.export()
+        self.assertEqual((self.dest / "install.sh").read_text(), "#!/bin/sh\n")
 
     def test_export_succeeds_with_a_clean_attributes_setup(self):
         (self.repo / ".gitattributes").write_text("*.txt text\n")
         self.commit("attributes that drop nothing")
         self.export()
         self.assertTrue((self.dest / "adk" / "a.py").is_file())
+
+    def test_export_of_a_packed_repository_passes(self):
+        self.git("gc", "-q")
+        self.export()
+        self.assertEqual((self.dest / "adk" / "a.py").read_text(), "a = 1\n")
+
+    def test_every_exported_blob_id_and_mode_is_the_commits(self):
+        (self.repo / "install.sh").chmod(0o755)
+        self.commit("exec")
+        self.export()
+        self.assertEqual(stat.S_IMODE((self.dest / "install.sh").stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((self.dest / "adk" / "a.py").stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE((self.dest / "adk").stat().st_mode), 0o755)
+
+    def test_export_refuses_a_forged_subtree_under_the_same_hash(self):
+        tree = self.git("rev-parse", "HEAD:adk")
+        good = self.git("rev-parse", "HEAD:adk/a.py")
+        evil = self.write_blob("a = 'evil'\n")
+        self.overwrite_loose(tree, "tree", self.forged_tree(tree, good, evil))
+        # git itself serves the forged bytes under the same name and does not complain when reading them
+        self.assertEqual(self.git("rev-parse", "HEAD:adk"), tree)
+        self.assertEqual(self.git("show", "HEAD:adk/a.py"), "a = 'evil'")
+        # the walk alone (without fsck) refuses and names the tree
+        with self.assertRaisesRegex(ValueError, f"tree {tree}"):
+            export.read_commit(self.repo, self.head())
+        for call in (lambda: self.export(), lambda: export.check_commit(self.repo, self.head())):
+            with self.assertRaises(ValueError):
+                call()
+        self.assertFalse(self.dest.exists())
+
+    def test_export_refuses_a_forged_blob_under_the_same_hash(self):
+        blob = self.git("rev-parse", "HEAD:adk/a.py")
+        self.overwrite_loose(blob, "blob", b"a = 'evil'\n")
+        with self.assertRaisesRegex(ValueError, f"blob {blob}"):
+            export.read_commit(self.repo, self.head())
+        with self.assertRaises(ValueError):
+            self.export()
+        self.assertFalse(self.dest.exists())
+
+    def test_export_refuses_a_forged_commit_object(self):
+        head = self.head()
+        raw = subprocess.run(["git", "-C", str(self.repo), "cat-file", "commit", head],
+                             capture_output=True, check=True).stdout
+        self.overwrite_loose(head, "commit", raw + b"x")
+        with self.assertRaisesRegex(ValueError, f"commit {head}"):
+            export.read_commit(self.repo, head)
+
+    def test_verify_refuses_after_an_object_is_forged(self):
+        self.export()
+        blob = self.git("rev-parse", "HEAD:adk/a.py")
+        self.overwrite_loose(blob, "blob", b"a = 'evil'\n")
+        with self.assertRaises(ValueError):
+            export.verify_export(self.repo, self.dest, self.head())
+
+    def test_fsck_findings_are_refused(self):
+        # a broken object that is not even in the export set: only fsck sees it
+        other = self.git("rev-parse", "HEAD:other.txt")
+        self.overwrite_loose(other, "blob", b"forged\n")
+        export.read_commit(self.repo, self.head())  # the walk does not look at it
+        with self.assertRaisesRegex(ValueError, "fsck"):
+            self.export()
+
+    def test_export_refuses_a_gitlink(self):
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},adk/sub")
+        self.git("commit", "-q", "-m", "gitlink")
+        with self.assertRaisesRegex(ValueError, "plain files"):
+            self.export()
+        self.assertFalse(self.dest.exists())
+
+    def test_export_refuses_commondir_alternates_grafts_shallow(self):
+        head = self.head()
+        for rel, text in (("commondir", "evil\n"), ("objects/info/alternates", "/nonexistent\n"),
+                          ("info/grafts", ""), ("shallow", "")):
+            with self.subTest(rel=rel):
+                path = self.repo / ".git" / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                with self.assertRaises(ValueError):
+                    export.check_commit(self.repo, head)
+                with self.assertRaises(ValueError):
+                    export.export_commit(self.repo, self.dest, head)
+                self.assertFalse(self.dest.exists())
+                path.unlink()
+        self.export()  # honest again
+
+    def test_the_refusal_names_the_file(self):
+        (self.repo / ".git" / "info").mkdir(exist_ok=True)
+        (self.repo / ".git" / "info" / "grafts").write_text("")
+        with self.assertRaisesRegex(ValueError, "grafts"):
+            export.export_commit(self.repo, self.dest, "a" * 40)
+
+    def test_export_refuses_when_the_common_dir_differs_from_the_git_dir(self):
+        wt = self.tmp / "linked"
+        self.git("worktree", "add", "-q", "-b", "other", str(wt))
+        with self.assertRaisesRegex(ValueError, "common"):
+            export.check_commit(wt, self.head())
+
+    def test_git_environment_variables_do_not_redirect_the_export(self):
+        other = self.tmp / "elsewhere"
+        other.mkdir()
+        subprocess.run(["git", "-C", str(other), "init", "-q"], check=True)
+        env = {"GIT_DIR": str(other / ".git"), "GIT_OBJECT_DIRECTORY": str(other / "x"),
+               "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(other), "GIT_COMMON_DIR": str(other / ".git")}
+        head = self.head()
+        with mock.patch.dict(os.environ, env):
+            export.export_commit(self.repo, self.dest, head)
+        self.assertEqual((self.dest / "adk" / "a.py").read_text(), "a = 1\n")
+
+    def test_a_subject_with_terminal_escapes_is_printed_harmless(self):
+        (self.repo / "adk" / "a.py").write_text("a = 3\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "evil \x1b[2Jsubject\n\nbody")
+        subject = export.check_commit(self.repo, self.head())
+        self.assertEqual(subject, "evil ?[2Jsubject")
 
     def test_export_refuses_a_symlink_in_the_commit(self):
         os.symlink("/etc/passwd", self.repo / "adk" / "link.py")
