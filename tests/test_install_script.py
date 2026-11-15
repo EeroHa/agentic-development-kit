@@ -80,10 +80,11 @@ class InstallScriptTest(unittest.TestCase):
         done = self.run_script(REPO / "install.sh")
         self.assertEqual(done.returncode, 2)
         self.assertIn("usage:", done.stderr)
-        self.assertIn('/usr/bin/python3 -I -B "$D/export.py" export "$R" "$D/src" "$H" && "$D/src/install.sh" "$H"',
-                      done.stderr)
+        self.assertIn('/usr/bin/python3 -I -B -E -s - "$R" "$D" "$H" <<\"PY\" && "$D/src/install.sh" "$H"', done.stderr)
         self.assertIn('D=$HOME/.config/adk/install-$H', done.stderr)
-        self.assertIn("fsck --no-dangling", done.stderr)
+        self.assertIn("git", done.stderr)
+        self.assertNotIn("cat-file blob", done.stderr)
+        self.assertNotIn("git show", done.stderr)
         self.assertNotIn("git archive", done.stderr)
         self.assertNotIn("TMPDIR", done.stderr)
         self.assert_nothing_installed()
@@ -193,11 +194,14 @@ class InstallScriptTest(unittest.TestCase):
         self.assertNotIn("[y/N]", done.stdout)
 
     def documented_lines(self, word):
-        """The two lines of the documented install (or uninstall) one-liner in docs/operating-the-wall.md."""
+        """The documented install (or uninstall) one-liner of docs/operating-the-wall.md, with the hash filled in."""
         text = (REPO / "docs" / "operating-the-wall.md").read_text()
-        blocks = [b.strip("\n") for b in text.split("```")[1::2] if "install-$H" in b]
-        block = blocks[0] if word == "install" else blocks[1]
-        self.assertEqual(len(block.splitlines()), 2)
+        block = [b.strip("\n") for b in text.split("```")[1::2] if "install-$H" in b][0]
+        self.assertTrue(block.endswith("\nPY"))
+        if word == "uninstall":
+            tail = '&& "$D/src/install.sh" "$H"\n'
+            self.assertEqual(block.count(tail), 1)
+            block = block.replace(tail, '&& "$D/src/install.sh" uninstall "$H"\n')
         return block.replace("<hash>", self.hash)
 
     def test_the_documented_one_liner_runs_the_verified_export_and_stops_at_the_prompt(self):
@@ -218,8 +222,8 @@ class InstallScriptTest(unittest.TestCase):
     def test_the_usage_text_and_the_docs_show_the_same_one_liner(self):
         usage = subprocess.run(["bash", str(REPO / "install.sh")], capture_output=True, text=True).stderr
         line = self.documented_lines("install").replace(self.hash, "<hash>")
-        for part in line.splitlines():
-            self.assertIn(part.strip(), usage)
+        self.assertIn(line, usage)
+        self.assertIn(line.split("\n", 2)[2].rsplit("\nPY", 1)[0], (REPO / "adk" / "install" / "bootstrap.py").read_text())
 
     def test_the_one_liner_refuses_a_forged_repository_before_running_anything(self):
         blob = self.git("rev-parse", f"{self.hash}:adk/install/export.py")

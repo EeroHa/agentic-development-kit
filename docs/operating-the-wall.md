@@ -53,20 +53,100 @@ Install from a terminal, not from inside a Claude session.
 
 The installer installs only a commit you name. You type its full 40-character hash, after you have reviewed that commit. Nothing from the working tree is ever copied to a system folder or run as root, because Claude Code can write to the working tree.
 
-Get the hash of the commit you reviewed with `git -C ~/projects/agentic-dev-kit log -1 --format=%H <branch>` or from `git log`, and read what it changes. Check the hash against the log by eye, because the first run (below) trusts the repository at that path. Then run, with `<hash>` replaced by the full hash:
+Get the hash of the commit you reviewed with `git -C ~/projects/agentic-dev-kit log -1 --format=%H <branch>` or from `git log`, and read what it changes. Check the hash against the log by eye, because the first run (below) trusts the repository at that path. Then paste this, with `<hash>` replaced by the full hash:
 
 ```
-export GIT_NO_REPLACE_OBJECTS=1; H=<hash>; R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}; D=$HOME/.config/adk/install-$H
-git -C "$R" fsck --no-dangling --no-progress && rm -rf "$D" && mkdir -p -m 700 "$D" && git -C "$R" cat-file blob "$H:adk/install/export.py" >"$D/export.py" && /usr/bin/python3 -I -B "$D/export.py" export "$R" "$D/src" "$H" && "$D/src/install.sh" "$H"
+H=<hash>; R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}; D=$HOME/.config/adk/install-$H
+/usr/bin/python3 -I -B -E -s - "$R" "$D" "$H" <<"PY" && "$D/src/install.sh" "$H"
+# bootstrap.py: the first verified read of the installer one-liner. Standard library only.
+# Run as: /usr/bin/python3 -I -B -E -s bootstrap.py <repo> <dest> <40-hex-commit>
+# It reads the commit, its tree, the adk and adk/install trees and the blob adk/install/export.py
+# through ONE `git cat-file --batch` process, each object once. It recomputes every object id as
+# sha1("<type> <len>" + NUL + data) and refuses on any difference. Only then does it write
+# those verified bytes to <dest>/export.py and run them: export.py export <repo> <dest>/src <commit>.
+import hashlib, os, re, shutil, subprocess, sys
+
+def refuse(why):
+    sys.exit("bootstrap refused: " + why)
+
+def tree_entries(data):
+    out, i = {}, 0
+    while i < len(data):
+        sp = data.index(b" ", i)
+        nul = data.index(b"\0", sp)
+        name = data[sp + 1:nul]
+        if name in out or len(data[nul + 1:nul + 21]) != 20:
+            raise ValueError("a tree object is malformed")
+        out[name] = (data[i:sp], data[nul + 1:nul + 21].hex())
+        i = nul + 21
+    return out
+
+def main(repo, dest, commit):
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        refuse("the commit must be 40 lowercase hex characters")
+    git_dir = os.path.join(repo, ".git")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_DIR=git_dir, GIT_NO_REPLACE_OBJECTS="1")
+    try:
+        session = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, cwd=repo)
+    except OSError as err:
+        refuse("cannot start git: %s" % err)
+
+    def read(kind, oid):
+        session.stdin.write(oid.encode() + b"\n")
+        session.stdin.flush()
+        head = session.stdout.readline().split()
+        if head[:2] != [oid.encode(), kind.encode()] or len(head) != 3 or not head[2].isdigit():
+            refuse("cannot read %s %s" % (kind, oid))
+        data = session.stdout.read(int(head[2]))
+        if len(data) != int(head[2]) or session.stdout.read(1) != b"\n":
+            refuse("%s %s is cut short" % (kind, oid))
+        if hashlib.sha1(b"%s %d\0" % (kind.encode(), len(data)) + data).hexdigest() != oid:
+            refuse("%s %s does not match its own hash (the object was replaced)" % (kind, oid))
+        return data
+
+    try:
+        first = read("commit", commit).split(b"\n", 1)[0]
+        if not re.fullmatch(rb"tree [0-9a-f]{40}", first):
+            refuse("the commit does not start with a tree line")
+        oid = first[5:].decode()
+        for name, want in ((b"adk", b"40000"), (b"install", b"40000"), (b"export.py", None)):
+            mode, oid = tree_entries(read("tree", oid)).get(name, (b"", ""))
+            if mode != want and not (want is None and mode in (b"100644", b"100755")):
+                refuse("%s is not a plain entry of the commit" % name.decode())
+        code = read("blob", oid)
+    except (ValueError, OSError) as err:
+        refuse(str(err))
+    finally:
+        session.kill()
+        session.wait()
+
+    if os.path.basename(dest) != "install-" + commit or os.path.islink(dest) or os.path.islink(os.path.dirname(dest)):
+        refuse("the destination must be a real folder named install-<hash>")
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+    os.mkdir(dest, 0o700)
+    target = os.path.join(dest, "export.py")
+    with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb") as f:
+        f.write(code)
+    done = subprocess.run([sys.executable, "-I", "-B", "-E", "-s", target, "export", repo,
+                           os.path.join(dest, "src"), commit], stdin=subprocess.DEVNULL)
+    sys.exit(done.returncode)
+
+if len(sys.argv) != 4:
+    refuse("usage: bootstrap.py <repo> <dest> <commit>")
+main(*sys.argv[1:])
+PY
 ```
 
 `install.sh` without a hash, or with anything that is not 40 lowercase hex characters, prints this usage and exits with code 2.
 
-What the line does, and what it trusts:
+What the paste does, and what it trusts:
 
-1. `git fsck --no-dangling` makes git check the hash of every object in the repository. Git does not do that when it reads a file, and Claude can write into `.git/objects`. Any complaint stops the line.
-2. It copies `export.py` out of the commit into `~/.config/adk/install-<hash>/`, a new folder only you can write. This is the first run, and it is the one weak spot: that copy is only as honest as the repository at that path. The fsck in step 1 is what covers it. The hash you typed is what you check by eye.
-3. `export.py` walks from the typed commit, re-reads every commit, tree and file it uses, recomputes each hash itself and refuses on any difference. It writes `adk/` and `install.sh` from those verified bytes to `~/.config/adk/install-<hash>/src`. It does not use `git archive`, `.gitattributes` or `.git/info/attributes`.
+1. The first command is the Python code in the paste (the same text as `adk/install/bootstrap.py`; read it, because it is the first thing that runs). It starts one `git cat-file --batch` and reads through it the typed commit, its tree, the `adk` tree, the `adk/install` tree and the file `adk/install/export.py`, each object once. It recomputes every object's hash itself and refuses on any difference, so a swapped object cannot slip in between a check and a read. The code never uses `git show`, `git cat-file blob` or `git fsck` to get code.
+2. It writes those verified bytes of `export.py` to `~/.config/adk/install-<hash>/`, a new folder only you can write, and runs them. This is the first run, and it is the one weak spot: git is the transport for the bytes, so the trust is in the hash you typed and in the pasted code, which you read.
+3. `export.py` runs `git fsck --no-dangling`, then walks from the typed commit, re-reads every commit, tree and file it uses, recomputes each hash itself and refuses on any difference. It writes `adk/` and `install.sh` from those verified bytes to `~/.config/adk/install-<hash>/src`. It does not use `git archive`, `.gitattributes` or `.git/info/attributes`.
 4. It runs `install.sh` from `src`. `install.sh` refuses to run from any other place, including the repo.
 
 Both checks rest on SHA-1: a forged file with the same SHA-1 as a reviewed one would pass. Making one needs a SHA-1 collision with a chosen target, which a file write alone does not give. That risk is not closed here.
@@ -87,12 +167,7 @@ The installer will:
 
 Use this when the wall blocks everything, including sessions that should start normally. The uninstall does not need Claude.
 
-It also needs a commit hash, and it runs the root restore from that commit's export, the same way as the install. Use the hash of the commit you installed, or any reviewed commit. Run the same two lines as for the install, with `uninstall "$H"` in place of `"$H"` after the last `&&`:
-
-```
-export GIT_NO_REPLACE_OBJECTS=1; H=<hash>; R=${ADK_REPO:-$HOME/projects/agentic-dev-kit}; D=$HOME/.config/adk/install-$H
-git -C "$R" fsck --no-dangling --no-progress && rm -rf "$D" && mkdir -p -m 700 "$D" && git -C "$R" cat-file blob "$H:adk/install/export.py" >"$D/export.py" && /usr/bin/python3 -I -B "$D/export.py" export "$R" "$D/src" "$H" && "$D/src/install.sh" uninstall "$H"
-```
+It also needs a commit hash, and it runs the root restore from that commit's export, the same way as the install. Use the hash of the commit you installed, or any reviewed commit. Paste the same text as for the install, with `uninstall "$H"` in place of `"$H"` at the end of the second line (`&& "$D/src/install.sh" uninstall "$H"`).
 
 It shows the hash and subject, asks `Uninstall commit <hash> (<subject>)? [y/N]`, restores the files it backed up, removes the user-level changes, and reloads AppArmor. Run it from a plain terminal. It asks for your sudo password.
 
